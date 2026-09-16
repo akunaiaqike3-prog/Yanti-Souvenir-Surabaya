@@ -493,6 +493,7 @@ const FS_TOTAL_KEYS = Object.keys(STORE_KEYS).length;
 let pendingProductImage = null; // data URL gambar produk yang baru diupload (sementara, sebelum disimpan)
 let pendingProductAddons = null; // add-on yang dipilih untuk produk yang sedang diedit: [{id,price}] (sementara)
 let isAdmin = false;
+const ADMIN_SESSION_KEY = 'ysAdminSession';
 let currentView = 'landing'; // landing | login | client | admin
 let adminTab = 'dashboard';
 let loaded = false;
@@ -717,12 +718,18 @@ function renderLogin(){
 function tryLogin(){
   const val = document.getElementById('passcodeInput').value;
   if(val === ADMIN_PASSCODE){
-    isAdmin = true; currentView='admin'; adminTab='dashboard'; setHash('admin'); render();
+    isAdmin = true; currentView='admin'; adminTab='dashboard'; setHash('admin');
+    try{ localStorage.setItem(ADMIN_SESSION_KEY,'1'); }catch(e){}
+    render();
   }else{
     document.getElementById('loginErr').textContent = 'Kode akses salah. Coba lagi.';
   }
 }
-function logoutAdmin(){ isAdmin=false; currentView='landing'; setHash(''); render(); }
+function logoutAdmin(){
+  isAdmin=false; currentView='landing'; setHash('');
+  try{ localStorage.removeItem(ADMIN_SESSION_KEY); }catch(e){}
+  render();
+}
 
 /* ============================================================
    CLIENT VIEW (katalog saja)
@@ -865,8 +872,17 @@ function renderDashboard(){
     return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear();
   }).length;
   const recent = DB.orders.slice().sort((a,b)=> b.orderDate.localeCompare(a.orderDate)).slice(0,5);
+  const clientLink = location.origin + location.pathname + '#klien';
   return `
   <div class="main-head"><div><h2>Dashboard</h2><p>Ringkasan toko Yanti Souvenir Surabaya.</p></div></div>
+  <div class="panel">
+    <h3>Link Klien</h3>
+    <p class="muted" style="font-size:13.5px;margin:0 0 12px;">Bagikan link ini ke klien agar mereka langsung melihat katalog (tanpa masuk ke dashboard admin).</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <input id="clientLinkInput" readonly value="${escapeAttr(clientLink)}" onclick="this.select()" style="flex:1;min-width:220px;padding:10px 12px;border:1px solid var(--grey-line);border-radius:8px;font-size:13.5px;color:var(--grey-dark);background:var(--champagne-pale);">
+      <button class="btn btn-fuschia" onclick="copyClientLink()">Salin Link</button>
+    </div>
+  </div>
   <div class="stat-grid">
     <div class="stat-card"><div class="n">${DB.categories.length}</div><div class="l">Kategori</div></div>
     <div class="stat-card"><div class="n">${DB.products.length}</div><div class="l">Produk Katalog</div></div>
@@ -880,6 +896,21 @@ function renderDashboard(){
       ${recent.map(o=>`<tr><td>${fmtDate(o.orderDate)}</td><td>${escapeHtml(o.clientSnapshot.name)}</td><td>${rupiah(o.total)}</td><td>${statusPill(o.status)}</td></tr>`).join('')}
       </table></div>` : `<p class="muted">Belum ada order.</p>`}
   </div>`;
+}
+function copyClientLink(){
+  const link = location.origin + location.pathname + '#klien';
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(link).then(()=>showToast('Link klien disalin!')).catch(()=>fallbackCopyClientLink(link));
+  } else {
+    fallbackCopyClientLink(link);
+  }
+}
+function fallbackCopyClientLink(link){
+  try{
+    const input = document.getElementById('clientLinkInput');
+    if(input){ input.select(); document.execCommand('copy'); showToast('Link klien disalin!'); return; }
+  }catch(e){}
+  showToast('Gagal menyalin otomatis. Salin manual: '+link);
 }
 function statusPill(s){
   const map = {'Baru':'pill-baru','Diproses':'pill-diproses','Selesai':'pill-selesai','Dibatalkan':'pill-batal'};
@@ -2274,8 +2305,16 @@ function escapeAttr(str){ return escapeHtml(str); }
 (async function init(){
   render();
   await loadAll(); // menunggu load awal dari Firestore; setelah ini, data tetap realtime tersinkron
-  if(location.hash === '#klien'){ currentView='client'; }
-  else if(location.hash === '#admin'){ currentView='login'; }
+  if(location.hash === '#klien'){
+    // Link khusus klien: selalu tampilkan katalog klien saja, tidak pernah menampilkan peran admin.
+    currentView='client';
+  } else if(location.hash === '#admin'){
+    // Link khusus admin: kalau sesi login masih tersimpan, langsung ke dashboard tanpa minta kode lagi.
+    let hasSession = false;
+    try{ hasSession = localStorage.getItem(ADMIN_SESSION_KEY) === '1'; }catch(e){}
+    if(hasSession){ isAdmin = true; currentView='admin'; adminTab='dashboard'; }
+    else { currentView='login'; }
+  }
   render();
 })();
 </script>
