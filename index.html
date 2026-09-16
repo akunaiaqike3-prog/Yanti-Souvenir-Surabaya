@@ -2347,10 +2347,11 @@ async function unduhSheetPdf(elId, filename, fallback){
   const el = document.getElementById(elId);
   if(!el){ showToast('Buka pratinjau dulu.'); return; }
   showToast('Menyiapkan PDF...');
-  const scrollParent = el.closest('.inv-scroll');
-  const prevScrollLeft = scrollParent ? scrollParent.scrollLeft : 0;
-  const prevScrollTop = scrollParent ? scrollParent.scrollTop : 0;
-  if(scrollParent){ scrollParent.scrollLeft = 0; scrollParent.scrollTop = 0; }
+  const clone = el.cloneNode(true);
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed;left:-10000px;top:0;z-index:-1;';
+  holder.appendChild(clone);
+  document.body.appendChild(holder);
   try{
     await muatHtml2Pdf();
     await html2pdf().set({
@@ -2358,15 +2359,15 @@ async function unduhSheetPdf(elId, filename, fallback){
       filename: filename,
       image: {type:'jpeg', quality:0.98},
       html2canvas: {scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:794, scrollX:0, scrollY:0},
-      jsPDF: {unit:'px', format:[794, Math.max(1123, el.scrollHeight)], orientation:'portrait', hotfixes:['px_scaling']}
-    }).from(el).save();
+      jsPDF: {unit:'px', format:[794, Math.max(1123, clone.scrollHeight)], orientation:'portrait', hotfixes:['px_scaling']}
+    }).from(clone).save();
     showToast('PDF selesai diunduh.');
   }catch(e){
     console.error(e);
     showToast('Unduh otomatis gagal — dibuka lewat Print, pilih "Save as PDF".');
     if(fallback) fallback();
   } finally {
-    if(scrollParent){ scrollParent.scrollLeft = prevScrollLeft; scrollParent.scrollTop = prevScrollTop; }
+    holder.remove();
   }
 }
 function cetakSheetHtml(html){
