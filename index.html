@@ -245,6 +245,8 @@
     display:flex;align-items:center;justify-content:center;
   }
   .menu-toggle:hover{border-color:var(--fuschia);color:var(--fuschia);}
+  .mobile-topbar{display:none;}
+  .sidebar-backdrop{display:none;}
   .sidebar-close-btn{
     margin-left:auto;border:none;background:transparent;color:var(--grey-soft);
     font-size:16px;padding:6px;border-radius:7px;flex:none;
@@ -326,13 +328,34 @@
   .progress-fill.is-selesai{background:var(--ok);}
   .progress-label{font-size:10.5px;color:var(--grey-soft);margin-top:3px;}
   @media(max-width:800px){
-    .admin-shell{flex-direction:column;}
-    .sidebar{width:100%;flex-direction:row;overflow-x:auto;align-items:center;padding:12px;}
-    .sidebar-brand{margin-bottom:0;margin-right:8px;}
-    .nav-item{flex:none;white-space:nowrap;}
-    .sidebar-foot{margin-top:0;margin-left:auto;padding-top:0;border-top:none;padding-left:8px;border-left:1px solid var(--champagne-deep);}
-    .main{padding:20px 16px 50px;}
+    .admin-shell{display:block;}
+    .mobile-topbar{
+      display:flex;align-items:center;gap:12px;position:fixed;top:0;left:0;right:0;height:58px;
+      background:var(--champagne);border-bottom:1px solid var(--champagne-deep);padding:0 16px;z-index:60;
+    }
+    .mobile-menu-btn{
+      width:38px;height:38px;border-radius:9px;border:1px solid var(--champagne-deep);background:var(--white);
+      font-size:17px;color:var(--grey-dark);display:flex;align-items:center;justify-content:center;flex:none;
+    }
+    .mobile-topbar-brand{display:flex;align-items:center;gap:8px;min-width:0;}
+    .mobile-topbar-brand img{width:30px;height:30px;object-fit:contain;flex:none;}
+    .mobile-topbar-brand span{font-family:'Cormorant Garamond',serif;font-weight:600;font-size:17px;color:var(--grey-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .menu-toggle{display:none;}
+    .sidebar-backdrop{
+      display:block;position:fixed;inset:0;background:rgba(51,47,42,.45);z-index:65;
+    }
+    .sidebar{
+      position:fixed;top:0;left:0;bottom:0;width:82vw;max-width:280px;
+      z-index:70;box-shadow:0 12px 40px rgba(0,0,0,.28);
+      animation:slideInSidebar .18s ease;
+    }
+    .sidebar-brand{margin-bottom:22px;}
+    .nav-item{flex:none;white-space:normal;text-align:left;}
+    .sidebar-foot{margin-top:auto;margin-left:0;padding-top:14px;padding-left:0;border-top:1px solid var(--champagne-deep);border-left:none;}
+    .main{padding:20px 16px 50px;padding-top:76px;}
+    .main.no-sidebar{padding-top:76px;}
   }
+  @keyframes slideInSidebar{ from{transform:translateX(-100%);} to{transform:translateX(0);} }
 
   /* ---------- INVOICE ---------- */
   .inv-scroll{overflow:auto;background:#EFEBE1;padding:16px;border-radius:12px;border:1px solid var(--grey-line);}
@@ -497,7 +520,7 @@ const ADMIN_SESSION_KEY = 'ysAdminSession';
 let currentView = 'landing'; // landing | login | client | admin
 let adminTab = 'dashboard';
 let loaded = false;
-let sidebarOpen = true;
+let sidebarOpen = (typeof window !== 'undefined' && window.innerWidth <= 800) ? false : true;
 
 let clientFilter = { cat: 'all', q: '' };
 let orderDraft = null; // saat sedang membuat order
@@ -848,6 +871,11 @@ function renderAdmin(){
     </div>` : '';
   return `
   <div class="admin-shell">
+    <div class="mobile-topbar">
+      <button class="mobile-menu-btn" onclick="toggleSidebar()" title="Buka menu">☰</button>
+      <div class="mobile-topbar-brand"><img src="${LOGO_DATA_URL}" alt="Yanti Souvenir"><span>Yanti Souvenir</span></div>
+    </div>
+    ${sidebarOpen? `<div class="sidebar-backdrop" onclick="toggleSidebar()"></div>` : ''}
     ${!sidebarOpen? `<button class="menu-toggle" onclick="toggleSidebar()" title="Buka menu">☰</button>` : ''}
     ${sidebarHtml}
     <div class="main${!sidebarOpen ? ' no-sidebar' : ''}">${body}</div>
@@ -860,6 +888,7 @@ function setAdminTab(t){
     if(editingOrderId){ editingOrderId=null; initOrderDraft(); }
     else if(!orderDraft){ initOrderDraft(); }
   }
+  if(window.innerWidth<=800){ sidebarOpen=false; }
   render();
 }
 function toggleSidebar(){ sidebarOpen = !sidebarOpen; render(); }
