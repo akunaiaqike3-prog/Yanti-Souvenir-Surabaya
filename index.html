@@ -1628,9 +1628,20 @@ function updateOrderStatus(id, status){
 }
 function updateOrderPayment(id, status){
   const o = DB.orders.find(o=>o.id===id); if(!o) return;
-  o.paymentStatus = status;
-  if(status==='Lunas') o.paidAmount = o.total;
-  else if(status==='Belum Bayar') o.paidAmount = 0;
+  const prevPaid = o.paidAmount||0;
+  if(status==='Lunas'){
+    o.paymentStatus = status; o.paidAmount = o.total;
+  } else if(status==='Belum Bayar'){
+    o.paymentStatus = status; o.paidAmount = 0;
+  } else if(status==='DP'){
+    const saran = (prevPaid>0 && prevPaid<o.total) ? prevPaid : Math.round((o.total/2)/1000)*1000;
+    const input = prompt('Nominal DP yang sudah diterima untuk order ini:', saran);
+    if(input===null){ render(); return; }
+    o.paymentStatus = status;
+    o.paidAmount = Math.max(0, Math.min(o.total, Number(input)||0));
+  } else {
+    o.paymentStatus = status;
+  }
   saveKey('orders'); showToast('Status pembayaran diperbarui.'); render();
 }
 function deleteOrder(id){
@@ -2354,19 +2365,15 @@ async function unduhSheetPdf(elId, filename, fallback){
   document.body.appendChild(holder);
   try{
     await muatHtml2Pdf();
-    // 794px & 1123px didesain di 96dpi (setara A4 210mm x 297mm).
-    // Konversi ke mm supaya ukuran halaman PDF akurat (unit 'px' + hotfix px_scaling
-    // sering bikin ukuran halaman salah hitung di versi jsPDF terbaru, sehingga hasil
-    // unduhan terlihat "geser/kepotong" walau pratinjau di layar sudah benar).
-    const PX_TO_MM = 25.4 / 96;
-    const pageWidthMM = 794 * PX_TO_MM; // ~210mm (A4)
-    const pageHeightMM = Math.max(1123, clone.scrollHeight) * PX_TO_MM;
+    try{ if(document.fonts && document.fonts.ready) await document.fonts.ready; }catch(e){}
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    const pageH = Math.max(1123, clone.scrollHeight);
     await html2pdf().set({
       margin: 0,
       filename: filename,
       image: {type:'jpeg', quality:0.98},
-      html2canvas: {scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:794, scrollX:0, scrollY:0},
-      jsPDF: {unit:'mm', format:[pageWidthMM, pageHeightMM], orientation:'portrait'}
+      html2canvas: {scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:794, windowHeight:pageH, height:pageH, scrollX:0, scrollY:0},
+      jsPDF: {unit:'px', format:[794, pageH], orientation:'portrait', hotfixes:['px_scaling']}
     }).from(clone).save();
     showToast('PDF selesai diunduh.');
   }catch(e){
