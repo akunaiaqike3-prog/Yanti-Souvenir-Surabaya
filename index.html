@@ -2360,7 +2360,7 @@ async function unduhSheetPdf(elId, filename, fallback){
   showToast('Menyiapkan PDF...');
   const clone = el.cloneNode(true);
   const holder = document.createElement('div');
-  holder.style.cssText = 'position:fixed;left:-10000px;top:0;z-index:-1;';
+  holder.style.cssText = 'position:fixed;left:0;top:0;opacity:0;pointer-events:none;z-index:-9999;overflow:hidden;';
   holder.appendChild(clone);
   document.body.appendChild(holder);
   try{
