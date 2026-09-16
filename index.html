@@ -408,6 +408,22 @@
   .inv-total-row{display:flex;justify-content:space-between;padding:13px 14px;font-size:17px;font-weight:600;background:#F2F0EB;}
   .inv-sec-title{font-weight:600;font-size:15px;margin:26px 0 8px;}
   .inv-sec-list{font-size:15px;line-height:1.7;}
+  /* ---------- pelunasan ---------- */
+  .inv-sub{display:block;font-family:'Jost',sans-serif;font-size:17px;letter-spacing:5px;
+    font-weight:500;color:#6b6b6b;text-align:right;margin-top:8px;}
+  .inv-sum.wide{width:58%;}
+  .inv-sum-row .sm{font-size:13.5px;font-weight:400;color:#4a4a4a;padding-right:14px;line-height:1.4;}
+  .inv-sum-row.neg span:last-child{color:#7C1C49;white-space:nowrap;}
+  .inv-sum-row.lunas{background:#E9F1EA;color:#2f5f39;}
+  .pay-row{display:grid;grid-template-columns:1fr 160px 150px 76px;gap:10px;align-items:start;
+    background:var(--champagne-pale);padding:10px;border-radius:10px;border:1px solid var(--grey-line);margin-bottom:10px;}
+  .pay-row input{width:100%;padding:8px 10px;border:1px solid var(--grey-line);border-radius:8px;font-size:14px;}
+  .pay-row .cell-lbl{font-size:11px;color:var(--grey-soft);display:block;margin-bottom:4px;}
+  @media(max-width:760px){ .pay-row{grid-template-columns:1fr 1fr;} }
+  .badge-inv{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.3px;}
+  .badge-dp{background:var(--fuschia-tint);color:var(--fuschia-deep);}
+  .badge-pl{background:#E3EFE6;color:#2f5f39;}
+  .link-ref{font-size:11px;color:var(--grey-soft);display:block;margin-top:2px;}
   /* ---------- lembar order (desain terpisah dari invoice) ---------- */
   .ord-sheet{
     width:794px;min-height:1123px;background:#fff;color:var(--grey-dark);margin:0 auto;
@@ -1788,6 +1804,8 @@ function renderModal(){
         <button class="btn btn-outline" style="background:#fff;" onclick="cetakInvoice('${inv.id}')">🖨 Print / Save as PDF</button>
         <button class="btn btn-outline" style="background:#fff;" onclick="bukaInvoiceTab('${inv.id}')">↗ Buka di tab baru</button>
         <button class="btn btn-fuschia" onclick="kirimWaInvoice('${inv.id}')">💬 Kirim ke WhatsApp</button>
+        ${(inv.id!=='__draft__' && !isPelunasan(inv))? `<button class="btn btn-outline" style="background:#fff;" onclick="buatPelunasan('${inv.id}')">💰 Buat Invoice Pelunasan</button>`:''}
+        ${(inv.id!=='__draft__' && inv.orderId)? `<button class="btn btn-outline" style="background:#fff;" onclick="tandaiBayarDiterima('${inv.id}')">✅ ${isPelunasan(inv)?'Tandai order lunas':'Catat DP diterima'}</button>`:''}
         <button class="btn btn-outline" style="background:#fff;" onclick="closeModal()">Tutup</button>
       </div>
       <div class="inv-scroll">${renderInvoiceSheet(inv)}</div>
@@ -1847,6 +1865,9 @@ function initInvoiceDraft(orderId){
     });
   }
   invoiceDraft = {
+    kind: 'dp',
+    refId: '',
+    payments: [],
     orderId: o ? o.id : '',
     seq: nextSeq(),
     date: todayISO(),
@@ -1882,11 +1903,62 @@ function buatInvoice(orderId){
   render();
   showToast('Invoice disiapkan dari data order.');
 }
+
+/* ---------- invoice pelunasan (otomatis dari invoice DP) ---------- */
+function buatPelunasan(id){
+  const src = DB.invoices.find(x=>x.id===id);
+  if(!src){ showToast('Invoice DP tidak ditemukan.'); return; }
+  if(isPelunasan(src)){ showToast('Ini sudah invoice pelunasan.'); return; }
+  const t = hitungInvoice(src);
+  invoiceDraft = {
+    kind: 'pelunasan',
+    refId: src.id,
+    orderId: src.orderId || '',
+    seq: nextSeq(),
+    date: todayISO(),
+    billed: src.billed,
+    phone: src.phone || '',
+    items: src.items.map(i=>({...i})),
+    dpPercent: src.dpPercent,
+    showSisa: false,
+    payments: [{
+      label: 'DP ' + src.dpPercent + '% (Invoice ' + src.no + ')',
+      date: src.date,
+      amount: t.dp
+    }],
+    note: ''
+  };
+  editingInvoiceId = null;
+  adminTab = 'invoice';
+  editing = {type:null, id:null};
+  modal = null;
+  render();
+  showToast('Invoice pelunasan disiapkan. DP ' + rupiah(t.dp) + ' otomatis dikurangkan.');
+}
+function updInvPay(i, val){
+  const p = invoiceDraft.payments[i]; if(!p) return;
+  p.amount = Math.max(0, Number(val)||0);
+  hitungUlangInvoice();
+}
+function tambahInvPay(){
+  invoiceDraft.payments.push({label:'Pembayaran ke-'+((invoiceDraft.payments||[]).length+1), date: todayISO(), amount:0});
+  render();
+}
+function hapusInvPay(i){ invoiceDraft.payments.splice(i,1); render(); }
+function totalDibayar(inv){
+  return (inv.payments||[]).reduce((s,p)=> s + (Number(p.amount)||0), 0);
+}
+function isPelunasan(inv){ return inv && inv.kind === 'pelunasan'; }
 function hitungInvoice(inv){
   const subtotal = inv.items.reduce((s,i)=> s + (i.free ? 0 : (Number(i.qty)||0)*(Number(i.price)||0)), 0);
+  if(isPelunasan(inv)){
+    const dibayar = totalDibayar(inv);
+    return {subtotal, dibayar, dp: dibayar, sisa: subtotal - dibayar};
+  }
   const dp = Math.round(subtotal * (Number(inv.dpPercent)||0) / 100);
-  return {subtotal, dp, sisa: subtotal - dp};
+  return {subtotal, dp, dibayar: dp, sisa: subtotal - dp};
 }
+function punyaPelunasan(id){ return DB.invoices.some(x=> x.refId === id); }
 
 /* ---------- tab invoice ---------- */
 function renderInvoiceTab(){
@@ -1909,16 +1981,24 @@ function renderInvoiceTab(){
   <div class="panel">
     <h3>Riwayat Invoice (${DB.invoices.length})</h3>
     ${list.length ? `<div class="table-wrap"><table>
-      <tr><th>No. Invoice</th><th>Tanggal</th><th>Ditagihkan ke</th><th>Subtotal</th><th>DP</th><th></th></tr>
+      <tr><th>Jenis</th><th>No. Invoice</th><th>Tanggal</th><th>Ditagihkan ke</th><th>Subtotal</th><th>Sudah Dibayar</th><th>Sisa</th><th></th></tr>
       ${list.map(inv=>{
         const t = hitungInvoice(inv);
+        const pl = isPelunasan(inv);
+        const ref = pl ? DB.invoices.find(x=>x.id===inv.refId) : null;
+        const sudahAdaPelunasan = !pl && punyaPelunasan(inv.id);
         return `<tr>
-          <td>${escapeHtml(inv.no)}</td>
+          <td><span class="badge-inv ${pl?'badge-pl':'badge-dp'}">${pl?'PELUNASAN':'DP'}</span></td>
+          <td>${escapeHtml(inv.no)}
+            ${ref? `<span class="link-ref">dari ${escapeHtml(ref.no)}</span>`:''}
+            ${sudahAdaPelunasan? `<span class="link-ref">✔ sudah ada pelunasan</span>`:''}</td>
           <td>${fmtDate(inv.date)}</td>
           <td>${escapeHtml((inv.billed||'').split('\n')[0]||'-')}</td>
           <td>${rupiah(t.subtotal)}</td>
-          <td>${rupiah(t.dp)} <span class="muted">(${inv.dpPercent}%)</span></td>
+          <td>${rupiah(t.dibayar)}${pl?'':` <span class="muted">(${inv.dpPercent}%)</span>`}</td>
+          <td>${t.sisa<=0? '<span class="muted">Lunas</span>' : rupiah(t.sisa)}</td>
           <td>
+            ${!pl? `<button class="icon-btn" title="Buat invoice pelunasan" onclick="buatPelunasan('${inv.id}')">💰</button>`:''}
             <button class="icon-btn" title="Lihat & PDF" onclick="lihatInvoice('${inv.id}')">👁️</button>
             <button class="icon-btn" title="Edit" onclick="editInvoice('${inv.id}')">✏️</button>
             <button class="icon-btn" title="Hapus" onclick="hapusInvoice('${inv.id}')">🗑️</button>
@@ -1932,11 +2012,14 @@ function mulaiInvoiceKosong(){ initInvoiceDraft(null); render(); }
 function renderInvoiceEditor(){
   const d = invoiceDraft;
   const t = hitungInvoice(d);
+  const pl = isPelunasan(d);
+  const ref = pl ? DB.invoices.find(x=>x.id===d.refId) : null;
   const no = buatNomorInvoice(d.seq, d.date, DB.settings.invPrefix);
   const addonOpts = DB.addons.map(a=>`<option value="${a.id}">${escapeHtml(a.name)} — ${rupiah(a.price)}</option>`).join('');
   return `
   <div class="main-head">
-    <div><h2>${editingInvoiceId?'Edit Invoice':'Invoice Baru'}</h2><p>Nomor: <strong>${escapeHtml(no)}</strong></p></div>
+    <div><h2>${editingInvoiceId?'Edit Invoice':(pl?'Invoice Pelunasan':'Invoice Baru')} ${pl?'<span class="badge-inv badge-pl" style="vertical-align:middle;">PELUNASAN</span>':'<span class="badge-inv badge-dp" style="vertical-align:middle;">DP</span>'}</h2>
+      <p>Nomor: <strong>${escapeHtml(no)}</strong>${ref? ' · lanjutan dari <strong>'+escapeHtml(ref.no)+'</strong>':''}</p></div>
     <button class="btn btn-outline" onclick="batalInvoice()">Kembali</button>
   </div>
 
@@ -1989,6 +2072,23 @@ function renderInvoiceEditor(){
 
   <div class="panel">
     <h3>4. Pembayaran</h3>
+    ${pl ? `
+    <p class="muted" style="font-size:13px;margin:-8px 0 14px;">Nominal di bawah ini otomatis dikurangkan dari subtotal. Baris pertama sudah terisi DP dari invoice sebelumnya — tinggal tambah baris kalau ada cicilan lain.</p>
+    ${(d.payments||[]).map((p,i)=>`
+      <div class="pay-row">
+        <div><span class="cell-lbl">Keterangan pembayaran</span><input value="${escapeAttr(p.label||'')}" oninput="invoiceDraft.payments[${i}].label=this.value" placeholder="DP 50% (Invoice 53/YSS/X/2026)"></div>
+        <div><span class="cell-lbl">Tanggal bayar</span><input type="date" value="${p.date||''}" onchange="invoiceDraft.payments[${i}].date=this.value; render();"></div>
+        <div><span class="cell-lbl">Nominal diterima</span><input type="number" min="0" step="500" value="${p.amount}" oninput="updInvPay(${i}, this.value)"></div>
+        <div><span class="cell-lbl">&nbsp;</span><button class="btn btn-outline btn-sm" onclick="hapusInvPay(${i})">Hapus</button></div>
+      </div>`).join('')}
+    <div class="row" style="margin-top:6px;">
+      <button class="btn btn-outline btn-sm" onclick="tambahInvPay()">+ Pembayaran lain (DP ke-2, cicilan)</button>
+    </div>
+    <div class="field" style="margin-top:16px;"><label>Catatan di invoice (opsional)</label><textarea rows="2" oninput="invoiceDraft.note=this.value" placeholder="Misal: pelunasan paling lambat H-7 sebelum acara">${escapeHtml(d.note)}</textarea></div>
+    <div class="total-line"><span>Subtotal keseluruhan</span><span id="invSubtotal">${rupiah(t.subtotal)}</span></div>
+    <div class="total-line"><span>Sudah dibayar (DP + cicilan)</span><span id="invDp">− ${rupiah(t.dibayar)}</span></div>
+    <div class="total-line grand"><span>${t.sisa<=0?'Status':'Sisa yang harus dibayar'}</span><span id="invSisa">${t.sisa<=0?'LUNAS':rupiah(t.sisa)}</span></div>
+    ` : `
     <div class="row">
       <div class="field" style="max-width:150px;"><label>DP (%)</label><input type="number" min="0" max="100" value="${d.dpPercent}" oninput="invoiceDraft.dpPercent=Math.min(100,Math.max(0,Number(this.value)||0)); hitungUlangInvoice();"></div>
       <div class="field" style="align-self:flex-end;"><label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" style="width:auto;" ${d.showSisa?'checked':''} onchange="invoiceDraft.showSisa=this.checked; render();"> Tampilkan baris sisa pelunasan</label></div>
@@ -1997,6 +2097,7 @@ function renderInvoiceEditor(){
     <div class="total-line"><span>Subtotal</span><span id="invSubtotal">${rupiah(t.subtotal)}</span></div>
     <div class="total-line"><span>DP ${d.dpPercent}%</span><span id="invDp">${rupiah(t.dp)}</span></div>
     <div class="total-line grand"><span>Sisa pelunasan</span><span id="invSisa">${rupiah(t.sisa)}</span></div>
+    `}
   </div>
 
   <div class="panel">
@@ -2018,8 +2119,13 @@ function hitungUlangInvoice(){
   const t = hitungInvoice(invoiceDraft);
   const a=document.getElementById('invSubtotal'), b=document.getElementById('invDp'), c=document.getElementById('invSisa');
   if(a) a.textContent = rupiah(t.subtotal);
-  if(b) b.textContent = rupiah(t.dp);
-  if(c) c.textContent = rupiah(t.sisa);
+  if(isPelunasan(invoiceDraft)){
+    if(b) b.textContent = '− ' + rupiah(t.dibayar);
+    if(c) c.textContent = t.sisa<=0 ? 'LUNAS' : rupiah(t.sisa);
+  }else{
+    if(b) b.textContent = rupiah(t.dp);
+    if(c) c.textContent = rupiah(t.sisa);
+  }
 }
 function setInvFree(i, checked){ invoiceDraft.items[i].free = checked; if(checked) invoiceDraft.items[i].price = 0; render(); }
 function tambahInvItem(){ invoiceDraft.items.push({desc:'', qty:1, price:0, free:false, sub:false}); render(); }
@@ -2046,9 +2152,14 @@ function simpanInvoice(){
   const data = {
     no: buatNomorInvoice(d.seq, d.date, DB.settings.invPrefix),
     seq: d.seq, date: d.date, orderId: d.orderId,
+    kind: d.kind || 'dp', refId: d.refId || '',
+    payments: (d.payments||[]).filter(p=>(Number(p.amount)||0)>0).map(p=>({...p})),
     billed: d.billed, phone: d.phone||'', items: isi.map(i=>({...i})),
     dpPercent: d.dpPercent, showSisa: d.showSisa, note: d.note
   };
+  if(data.kind==='pelunasan' && !data.payments.length){
+    showToast('Isi minimal satu nominal pembayaran yang sudah diterima.'); return;
+  }
   if(editingInvoiceId){
     const inv = DB.invoices.find(x=>x.id===editingInvoiceId);
     Object.assign(inv, data);
@@ -2070,6 +2181,8 @@ function editInvoice(id){
   const inv = DB.invoices.find(x=>x.id===id); if(!inv) return;
   invoiceDraft = {
     orderId: inv.orderId||'', seq: inv.seq, date: inv.date,
+    kind: inv.kind || 'dp', refId: inv.refId || '',
+    payments: (inv.payments||[]).map(p=>({...p})),
     billed: inv.billed, phone: inv.phone||'', items: inv.items.map(i=>({...i})),
     dpPercent: inv.dpPercent, showSisa: !!inv.showSisa, note: inv.note||''
   };
@@ -2088,6 +2201,8 @@ function pratinjauInvoiceDraft(){
   modal = {type:'invoice', id:'__draft__', data:{
     id:'__draft__', no: buatNomorInvoice(d.seq, d.date, DB.settings.invPrefix),
     seq:d.seq, date:d.date, billed:d.billed, phone:d.phone||'',
+    kind: d.kind||'dp', refId: d.refId||'', orderId: d.orderId||'',
+    payments:(d.payments||[]).filter(p=>(Number(p.amount)||0)>0),
     items:d.items.filter(i=>String(i.desc||'').trim()!==''),
     dpPercent:d.dpPercent, showSisa:d.showSisa, note:d.note
   }};
@@ -2113,7 +2228,7 @@ function renderInvoiceSheet(inv){
   <div class="inv-sheet" id="invSheet">
     <div class="inv-head">
       <img class="inv-logo" src="${INVOICE_LOGO_URL}" alt="Yanti Souvenir">
-      <div class="inv-word">INVOICE</div>
+      <div class="inv-word">INVOICE${isPelunasan(inv)?'<span class="inv-sub">PELUNASAN</span>':''}</div>
     </div>
     <div class="inv-meta">
       <div class="inv-billed">
@@ -2129,11 +2244,19 @@ function renderInvoiceSheet(inv){
       <thead><tr><th>Item</th><th class="qty">Quantity</th><th class="up">Unit Price</th><th class="tot">Total</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${isPelunasan(inv) ? `
+    <div class="inv-sum wide">
+      <div class="inv-sum-row"><span>Subtotal</span><span>${fmtNum(t.subtotal)}</span></div>
+      ${(inv.payments||[]).map(p=>`<div class="inv-sum-row neg">
+        <span class="sm">${escapeHtml(p.label||'Pembayaran')}${p.date? ' · '+fmtTanggalPanjang(p.date):''}</span>
+        <span>&minus; ${fmtNum(p.amount)}</span></div>`).join('')}
+      <div class="inv-sum-row ${t.sisa<=0?'lunas':'hl'}"><span>${t.sisa<=0?'LUNAS':'Sisa Pelunasan'}</span><span>${fmtNum(Math.max(t.sisa,0))}</span></div>
+    </div>` : `
     <div class="inv-sum">
       <div class="inv-sum-row"><span>Subtotal</span><span>${fmtNum(t.subtotal)}</span></div>
       <div class="inv-sum-row hl"><span>DP ${inv.dpPercent}%</span><span>${fmtNum(t.dp)}</span></div>
       ${inv.showSisa? `<div class="inv-sum-row"><span>Sisa Pelunasan</span><span>${fmtNum(t.sisa)}</span></div>`:''}
-    </div>
+    </div>`}
     ${inv.note? `<div class="inv-note">${escapeHtml(inv.note)}</div>`:''}
     <div class="inv-thanks">Thank you!</div>
     <div class="inv-foot">
@@ -2157,7 +2280,8 @@ function getInvoice(id){
 }
 function namaFileInvoice(inv){
   const klien = (inv.billed||'').split('\n')[0].replace(/[\\/:*?"<>|]/g,'').trim();
-  return ('Invoice '+inv.no.replace(/\//g,'-')+(klien?' - '+klien:'')+'.pdf');
+  const jenis = isPelunasan(inv) ? 'Invoice Pelunasan ' : 'Invoice ';
+  return (jenis+inv.no.replace(/\//g,'-')+(klien?' - '+klien:'')+'.pdf');
 }
 
 /* ---------- WhatsApp ---------- */
@@ -2186,6 +2310,28 @@ function pesanWaInvoice(inv){
   const s = DB.settings||{};
   const t = hitungInvoice(inv);
   const nama = (inv.billed||'').split('\n')[0] || 'Kak';
+  const rek = 'Pembayaran:\n' + (s.bank||'Bank BCA') + '\n'
+    + 'a.n. ' + (s.accName||'Eky Dwiyanti') + '\n'
+    + (s.accNo||'5200346027') + '\n\n';
+
+  if(isPelunasan(inv)){
+    const bayar = (inv.payments||[]).map(p=>
+      '- ' + (p.label||'Pembayaran') + (p.date? ' ('+fmtTanggalPanjang(p.date)+')':'') + ': ' + rupiah(p.amount)
+    ).join('\n');
+    return 'Halo ' + nama + ', berikut invoice PELUNASAN pesanan di Yanti Souvenir Surabaya.\n\n'
+      + 'No. Invoice: ' + inv.no + '\n'
+      + 'Tanggal: ' + fmtTanggalPanjang(inv.date) + '\n\n'
+      + 'Rincian pesanan:\n' + inv.items.map(barisTeks).join('\n') + '\n\n'
+      + 'Subtotal keseluruhan: ' + rupiah(t.subtotal) + '\n\n'
+      + 'Sudah dibayar:\n' + bayar + '\n'
+      + 'Total sudah dibayar: ' + rupiah(t.dibayar) + '\n\n'
+      + (t.sisa<=0
+          ? 'Sisa pembayaran: LUNAS. Terima kasih banyak 🙏\n\n'
+          : 'SISA YANG PERLU DIBAYAR: ' + rupiah(t.sisa) + '\n\n' + rek)
+      + (inv.note ? inv.note + '\n\n' : '')
+      + 'File PDF invoice saya kirim menyusul di chat ini. Terima kasih 🙏';
+  }
+
   return 'Halo ' + nama + ', berikut invoice pesanan di Yanti Souvenir Surabaya.\n\n'
     + 'No. Invoice: ' + inv.no + '\n'
     + 'Tanggal: ' + fmtTanggalPanjang(inv.date) + '\n\n'
@@ -2193,11 +2339,30 @@ function pesanWaInvoice(inv){
     + 'Subtotal: ' + rupiah(t.subtotal) + '\n'
     + 'DP ' + inv.dpPercent + '%: ' + rupiah(t.dp) + '\n'
     + 'Sisa pelunasan: ' + rupiah(t.sisa) + '\n\n'
-    + 'Pembayaran:\n' + (s.bank||'Bank BCA') + '\n'
-    + 'a.n. ' + (s.accName||'Eky Dwiyanti') + '\n'
-    + (s.accNo||'5200346027') + '\n\n'
+    + rek
     + (inv.note ? inv.note + '\n\n' : '')
     + 'File PDF invoice saya kirim menyusul di chat ini. Terima kasih 🙏';
+}
+/* ---------- sinkron ke status pembayaran order ---------- */
+function tandaiBayarDiterima(id){
+  const inv = getInvoice(id); if(!inv) return;
+  if(inv.id === '__draft__'){ showToast('Simpan invoice-nya dulu ya.'); return; }
+  if(!inv.orderId){ showToast('Invoice ini tidak terhubung ke order mana pun.'); return; }
+  const o = DB.orders.find(x=>x.id===inv.orderId);
+  if(!o){ showToast('Order-nya sudah tidak ada.'); return; }
+  const t = hitungInvoice(inv);
+  if(isPelunasan(inv)){
+    if(!confirm('Tandai order ' + (o.clientSnapshot?o.clientSnapshot.name:'') + ' sebagai LUNAS?')) return;
+    o.paymentStatus = 'Lunas';
+    o.paidAmount = o.total;
+    saveKey('orders'); showToast('Order ditandai LUNAS.');
+  }else{
+    if(!confirm('Catat DP ' + rupiah(t.dp) + ' sudah diterima untuk order ini?')) return;
+    o.paymentStatus = o.total>0 && t.dp>=o.total ? 'Lunas' : 'DP';
+    o.paidAmount = Math.max(0, Math.min(o.total, t.dp));
+    saveKey('orders'); showToast('DP dicatat di order.');
+  }
+  render();
 }
 function kirimWaInvoice(id){
   const inv = getInvoice(id); if(!inv) return;
