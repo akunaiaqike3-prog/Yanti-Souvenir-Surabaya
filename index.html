@@ -391,7 +391,7 @@
   }
   .ord-band{background:var(--champagne);padding:26px 54px;display:flex;align-items:center;justify-content:space-between;
     border-bottom:3px solid var(--fuschia);}
-  .ord-band .ord-logo-box{background:#fff;border-radius:14px;padding:10px 16px;box-shadow:0 2px 8px rgba(51,47,42,.07);}
+  .ord-band .ord-logo-box{padding:10px 16px;}
   .ord-band img{width:128px;display:block;}
   .ord-band .kick{font-size:12px;letter-spacing:3.5px;color:var(--fuschia-deep);text-align:right;}
   .ord-band .ttl{font-family:'Cormorant Garamond',serif;font-size:34px;font-weight:600;line-height:1.1;text-align:right;color:var(--grey-dark);}
@@ -529,7 +529,7 @@ function normalizeSettings(){
     bank:'Bank BCA', accName:'Eky Dwiyanti', accNo:'5200346027',
     brandName:'Yanti_souvenir_surabaya',
     invAddress:'Jl. Gersikan I/23-c Surabaya', invPhone:'0857 4937 8009',
-    invPrefix:'YSS', nextInvoiceSeq:53, dpDefault:50
+    invPrefix:'YSS', nextInvoiceSeq:53, dpDefault:50, seeded:false
   }, DB.settings);
 }
 
@@ -576,12 +576,18 @@ async function loadAll(){
 
 async function finishInitialLoad(){
   normalizeSettings();
-  if(DB.categories.length===0 && DB.products.length===0){
+  if(!DB.settings.seeded && DB.categories.length===0 && DB.products.length===0){
     seedData();
+    DB.settings.seeded = true;
     await saveKey('categories');
     await saveKey('products');
     await saveKey('bonus');
     await saveKey('addons');
+    await saveKey('settings');
+  } else if(!DB.settings.seeded){
+    // sudah ada data (misal migrasi lama) tapi belum ditandai -> tandai saja tanpa seed ulang
+    DB.settings.seeded = true;
+    await saveKey('settings');
   }
   loaded = true;
 }
