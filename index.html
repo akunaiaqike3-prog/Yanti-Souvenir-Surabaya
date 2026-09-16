@@ -919,6 +919,7 @@ function renderDashboard(){
     return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear();
   }).length;
   const recent = DB.orders.slice().sort((a,b)=> b.orderDate.localeCompare(a.orderDate)).slice(0,5);
+  const piutang = DB.orders.filter(o=>o.status!=='Dibatalkan').reduce((s,o)=>s+Math.max((o.total||0)-(o.paidAmount||0),0),0);
   const clientLink = location.origin + location.pathname + '#klien';
   return `
   <div class="main-head"><div><h2>Dashboard</h2><p>Ringkasan toko Yanti Souvenir Surabaya.</p></div></div>
@@ -936,6 +937,7 @@ function renderDashboard(){
     <div class="stat-card"><div class="n">${DB.clients.length}</div><div class="l">Klien</div></div>
     <div class="stat-card"><div class="n">${DB.orders.length}</div><div class="l">Total Order</div></div>
     <div class="stat-card"><div class="n">${thisMonth}</div><div class="l">Order Bulan Ini</div></div>
+    <div class="stat-card"><div class="n" style="font-size:20px;">${rupiah(piutang)}</div><div class="l">Piutang Belum Lunas</div></div>
   </div>
   <div class="panel">
     <h3>Order Terbaru</h3>
@@ -962,6 +964,10 @@ function fallbackCopyClientLink(link){
 function statusPill(s){
   const map = {'Baru':'pill-baru','Diproses':'pill-diproses','Selesai':'pill-selesai','Dibatalkan':'pill-batal'};
   return `<span class="pill ${map[s]||'pill-baru'}">${s}</span>`;
+}
+function paymentPill(s){
+  const map = {'Belum Bayar':'pill-batal','DP':'pill-diproses','Lunas':'pill-selesai'};
+  return `<span class="pill ${map[s]||'pill-batal'}">${s||'Belum Bayar'}</span>`;
 }
 
 /* ---------- kategori ---------- */
@@ -1317,11 +1323,20 @@ function initOrderDraft(){
     items: [], // {productId, name, price, qty}
     bonusIds: [],
     notes: '',
+    paymentStatus: 'Belum Bayar',
+    paidAmount: 0,
     pickCategory: DB.categories[0]?DB.categories[0].id:'',
     pickProduct: '',
     pickQty: 1,
     pickAddonIds: []
   };
+}
+function setOrderPaymentStatus(status){
+  orderDraft.paymentStatus = status;
+  const total = orderDraft.items.reduce((s,i)=>s+(i.unitTotal!=null?i.unitTotal:i.price)*i.qty,0);
+  if(status==='Lunas') orderDraft.paidAmount = total;
+  else if(status==='Belum Bayar') orderDraft.paidAmount = 0;
+  render();
 }
 function renderBuatOrderTab(){
   if(!orderDraft) initOrderDraft();
@@ -1329,7 +1344,7 @@ function renderBuatOrderTab(){
   const clientSelect = DB.clients.map(c=>`<option value="${c.id}" ${d.clientId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
   const catOpts = DB.categories.map(c=>`<option value="${c.id}" ${d.pickCategory===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
   const prodsInCat = DB.products.filter(p=>p.categoryId===d.pickCategory);
-  const prodOpts = prodsInCat.map(p=>`<option value="${p.id}" ${d.pickProduct===p.id?'selected':''}>${escapeHtml(p.name)} — ${rupiah(p.price)}</option>`).join('');
+  const prodOpts = `<option value=""${d.pickProduct?'':' selected'}>— pilih produk —</option>` + prodsInCat.map(p=>`<option value="${p.id}" ${d.pickProduct===p.id?'selected':''}>${escapeHtml(p.name)} — ${rupiah(p.price)}</option>`).join('');
   const total = d.items.reduce((s,i)=>s+(i.unitTotal!=null?i.unitTotal:i.price)*i.qty,0);
 
   return `
@@ -1401,7 +1416,22 @@ function renderBuatOrderTab(){
   </div>
 
   <div class="panel">
-    <h3>4. Catatan &amp; Ringkasan</h3>
+    <h3>4. Pembayaran</h3>
+    <div class="row">
+      <div class="field" style="max-width:200px;"><label>Status Pembayaran</label>
+        <select onchange="setOrderPaymentStatus(this.value)">
+          ${['Belum Bayar','DP','Lunas'].map(s=>`<option value="${s}" ${d.paymentStatus===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field" style="max-width:200px;"><label>Jumlah Dibayar</label>
+        <input type="number" min="0" step="1000" value="${d.paidAmount||0}" ${d.paymentStatus==='Belum Bayar'?'disabled':''} onchange="orderDraft.paidAmount=Math.max(0,Number(this.value)||0); render();">
+      </div>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin:0;">Sisa tagihan: ${rupiah(Math.max(total-(d.paidAmount||0),0))}</p>
+  </div>
+
+  <div class="panel">
+    <h3>5. Catatan &amp; Ringkasan</h3>
     <div class="field"><label>Catatan Tambahan</label><textarea rows="2" oninput="orderDraft.notes=this.value" placeholder="Catatan khusus untuk order ini">${escapeHtml(d.notes)}</textarea></div>
     <div class="total-line"><span>Jumlah item</span><span>${d.items.reduce((s,i)=>s+i.qty,0)} pcs</span></div>
     <div class="total-line"><span>Bonus dipilih</span><span>${d.bonusIds.length} item</span></div>
@@ -1471,6 +1501,8 @@ function submitOrder(){
     existing.items = d.items;
     existing.bonusIds = d.bonusIds.slice();
     existing.notes = d.notes;
+    existing.paymentStatus = d.paymentStatus || 'Belum Bayar';
+    existing.paidAmount = d.paidAmount || 0;
     existing.total = total;
     saveKey('orders');
     editingOrderId = null;
@@ -1490,6 +1522,8 @@ function submitOrder(){
     bonusIds: d.bonusIds.slice(),
     notes: d.notes,
     status: 'Baru',
+    paymentStatus: d.paymentStatus || 'Belum Bayar',
+    paidAmount: d.paidAmount || 0,
     total
   };
   DB.orders.push(order);
@@ -1520,6 +1554,8 @@ function editOrder(id){
     })),
     bonusIds: o.bonusIds.slice(),
     notes: o.notes || '',
+    paymentStatus: o.paymentStatus || 'Belum Bayar',
+    paidAmount: o.paidAmount || 0,
     pickCategory: DB.categories[0] ? DB.categories[0].id : '',
     pickProduct: '',
     pickQty: 1,
@@ -1549,8 +1585,10 @@ function renderDaftarOrderTab(){
   <div class="main-head"><div><h2>Daftar Order</h2><p>Riwayat pemesanan souvenir dari klien, diurutkan berdasarkan tanggal acara terdekat.</p></div></div>
   <div class="panel">
     ${sorted.length ? `<div class="table-wrap"><table>
-      <tr><th>Tanggal Acara</th><th>Tanggal Order</th><th>Klien</th><th>Item</th><th>Total</th><th>Status</th><th>Progress</th><th></th></tr>
-      ${sorted.map(o=>`<tr>
+      <tr><th>Tanggal Acara</th><th>Tanggal Order</th><th>Klien</th><th>Item</th><th>Total</th><th>Status</th><th>Pembayaran</th><th>Progress</th><th></th></tr>
+      ${sorted.map(o=>{
+        const sisa = Math.max((o.total||0)-(o.paidAmount||0),0);
+        return `<tr>
         <td>${o.eventDate? fmtDate(o.eventDate) : '<span class="muted">-</span>'}</td>
         <td>${fmtDate(o.orderDate)}</td>
         <td>${escapeHtml(o.clientSnapshot.name)}</td>
@@ -1561,13 +1599,20 @@ function renderDaftarOrderTab(){
             ${['Baru','Diproses','Selesai','Dibatalkan'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${s}</option>`).join('')}
           </select>
         </td>
+        <td>
+          <select onchange="updateOrderPayment('${o.id}', this.value)" style="border:1px solid var(--grey-line);border-radius:6px;padding:4px 6px;font-size:12.5px;">
+            ${['Belum Bayar','DP','Lunas'].map(s=>`<option value="${s}" ${(o.paymentStatus||'Belum Bayar')===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+          ${sisa>0? `<div class="muted" style="font-size:11px;margin-top:3px;">Sisa: ${rupiah(sisa)}</div>` : ''}
+        </td>
         <td>${renderOrderProgress(o.status)}</td>
         <td><button class="icon-btn" title="Detail" onclick="viewOrder('${o.id}')">👁️</button>
         <button class="icon-btn" title="Lembar order (PDF/WA)" onclick="lihatLembarOrder('${o.id}')">📄</button>
         <button class="icon-btn" title="Buat invoice" onclick="buatInvoice('${o.id}')">🧾</button>
         <button class="icon-btn" onclick="editOrder('${o.id}')">✏️</button>
         <button class="icon-btn" onclick="deleteOrder('${o.id}')">🗑️</button></td>
-      </tr>`).join('')}
+      </tr>`;
+      }).join('')}
     </table></div>` : `<p class="muted">Belum ada order masuk.</p>`}
   </div>`;
 }
@@ -1580,6 +1625,13 @@ function renderOrderProgress(status){
 }
 function updateOrderStatus(id, status){
   const o = DB.orders.find(o=>o.id===id); if(o){ o.status=status; saveKey('orders'); showToast('Status order diperbarui.'); render(); }
+}
+function updateOrderPayment(id, status){
+  const o = DB.orders.find(o=>o.id===id); if(!o) return;
+  o.paymentStatus = status;
+  if(status==='Lunas') o.paidAmount = o.total;
+  else if(status==='Belum Bayar') o.paidAmount = 0;
+  saveKey('orders'); showToast('Status pembayaran diperbarui.'); render();
 }
 function deleteOrder(id){
   if(!confirm('Hapus order ini?')) return;
@@ -1678,6 +1730,9 @@ function renderModal(){
       <div class="detail-row"><span class="k">Tanggal Order</span><span>${fmtDate(o.orderDate)}</span></div>
       <div class="detail-row"><span class="k">Tanggal Acara</span><span>${o.eventDate?fmtDate(o.eventDate):'-'}</span></div>
       <div class="detail-row"><span class="k">Status</span><span>${statusPill(o.status)}</span></div>
+      <div class="detail-row"><span class="k">Pembayaran</span><span>${paymentPill(o.paymentStatus||'Belum Bayar')}</span></div>
+      ${(o.paymentStatus||'Belum Bayar')!=='Belum Bayar' ? `<div class="detail-row"><span class="k">Sudah Dibayar</span><span>${rupiah(o.paidAmount||0)}</span></div>` : ''}
+      <div class="detail-row"><span class="k">Sisa Tagihan</span><span>${rupiah(Math.max((o.total||0)-(o.paidAmount||0),0))}</span></div>
       <h4 style="margin:16px 0 8px;">Item Pesanan</h4>
       <div class="table-wrap"><table>
         <tr><th>Produk</th><th>Qty</th><th>Harga/pcs</th><th>Subtotal</th></tr>
@@ -1888,7 +1943,7 @@ function renderInvoiceEditor(){
     <h3>2. Billed To</h3>
     <div class="field"><label>Nama klien &amp; keterangan acara (satu baris = satu baris di invoice)</label>
       <textarea rows="4" oninput="invoiceDraft.billed=this.value" placeholder="Kak Candra &amp; Monda&#10;(Puri Hapsari Wedding)&#10;Event 10 Oktober 2026">${escapeHtml(d.billed)}</textarea></div>
-    <div class="row">
+    <div class="row" style="align-items:flex-end;">
       <div class="field" style="max-width:280px;"><label>No. WhatsApp klien (terisi otomatis dari data klien)</label>
         <input value="${escapeAttr(d.phone||'')}" oninput="invoiceDraft.phone=this.value" placeholder="08xxxxxxxxxx"></div>
       ${DB.clients.length? `<div class="field" style="max-width:300px;"><label>Ambil dari Data Klien</label>
@@ -2292,13 +2347,17 @@ async function unduhSheetPdf(elId, filename, fallback){
   const el = document.getElementById(elId);
   if(!el){ showToast('Buka pratinjau dulu.'); return; }
   showToast('Menyiapkan PDF...');
+  const scrollParent = el.closest('.inv-scroll');
+  const prevScrollLeft = scrollParent ? scrollParent.scrollLeft : 0;
+  const prevScrollTop = scrollParent ? scrollParent.scrollTop : 0;
+  if(scrollParent){ scrollParent.scrollLeft = 0; scrollParent.scrollTop = 0; }
   try{
     await muatHtml2Pdf();
     await html2pdf().set({
       margin: 0,
       filename: filename,
       image: {type:'jpeg', quality:0.98},
-      html2canvas: {scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:794},
+      html2canvas: {scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:794, scrollX:0, scrollY:0},
       jsPDF: {unit:'px', format:[794, Math.max(1123, el.scrollHeight)], orientation:'portrait', hotfixes:['px_scaling']}
     }).from(el).save();
     showToast('PDF selesai diunduh.');
@@ -2306,6 +2365,8 @@ async function unduhSheetPdf(elId, filename, fallback){
     console.error(e);
     showToast('Unduh otomatis gagal — dibuka lewat Print, pilih "Save as PDF".');
     if(fallback) fallback();
+  } finally {
+    if(scrollParent){ scrollParent.scrollLeft = prevScrollLeft; scrollParent.scrollTop = prevScrollTop; }
   }
 }
 function cetakSheetHtml(html){
