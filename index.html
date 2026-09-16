@@ -2363,8 +2363,11 @@ async function unduhSheetPdf(elId, filename, fallback){
   holder.style.cssText = 'position:fixed;left:0;top:0;opacity:0;pointer-events:none;z-index:-9999;overflow:hidden;';
   holder.appendChild(clone);
   document.body.appendChild(holder);
+  const scrollXAwal = window.scrollX || window.pageXOffset || 0;
+  const scrollYAwal = window.scrollY || window.pageYOffset || 0;
   try{
     await muatHtml2Pdf();
+    window.scrollTo(0, 0);
     try{ if(document.fonts && document.fonts.ready) await document.fonts.ready; }catch(e){}
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     const pageH = Math.max(1123, clone.scrollHeight);
@@ -2372,7 +2375,7 @@ async function unduhSheetPdf(elId, filename, fallback){
       margin: 0,
       filename: filename,
       image: {type:'jpeg', quality:0.98},
-      html2canvas: {scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:794, windowHeight:pageH, height:pageH, scrollX:0, scrollY:0},
+      html2canvas: {scale:2, useCORS:true, backgroundColor:'#ffffff', windowWidth:794, windowHeight:pageH, height:pageH, x:0, y:0, scrollX:0, scrollY:0},
       jsPDF: {unit:'px', format:[794, pageH], orientation:'portrait', hotfixes:['px_scaling']}
     }).from(clone).save();
     showToast('PDF selesai diunduh.');
@@ -2382,6 +2385,7 @@ async function unduhSheetPdf(elId, filename, fallback){
     if(fallback) fallback();
   } finally {
     holder.remove();
+    window.scrollTo(scrollXAwal, scrollYAwal);
   }
 }
 function cetakSheetHtml(html){
