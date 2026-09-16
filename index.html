@@ -299,6 +299,13 @@
   .bonus-check .b-desc{font-size:12.5px;color:var(--grey-soft);line-height:1.45;margin-top:2px;}
   .addon-price-field{max-width:240px;margin:-2px 0 12px 41px;}
   .added-items-table{margin-top:6px;}
+  .nego-in{width:112px;padding:6px 8px;border:1px solid var(--grey-line);border-radius:7px;font-size:13px;}
+  .nego-in.qty{width:64px;text-align:center;}
+  .nego-in.aktif{border-color:var(--fuschia);background:var(--fuschia-tint-2);font-weight:600;color:var(--fuschia-deep);}
+  .harga-coret{text-decoration:line-through;color:var(--grey-soft);font-size:12px;display:block;}
+  .tag-nego{display:inline-block;background:var(--fuschia-tint);color:var(--fuschia-deep);
+    font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:999px;margin-left:5px;}
+  .disk-box{background:var(--champagne-pale);border:1px solid var(--grey-line);border-radius:10px;padding:12px;margin-top:14px;}
   .total-line{display:flex;justify-content:space-between;padding:10px 0;font-size:15px;}
   .total-line.grand{font-weight:600;font-size:18px;border-top:1px solid var(--grey-line);margin-top:6px;color:var(--fuschia-deep);}
 
@@ -1328,6 +1335,24 @@ function deleteKlien(id){
   saveKey('clients'); showToast('Klien dihapus.'); render();
 }
 
+/* ---------- harga & diskon order ---------- */
+function hargaAsliItem(it){ return it.unitTotal!=null ? it.unitTotal : (Number(it.price)||0); }
+function hargaItem(it){
+  return (it.dealPrice!=null && it.dealPrice!=='') ? (Number(it.dealPrice)||0) : hargaAsliItem(it);
+}
+function adaNego(it){ return it.dealPrice!=null && Number(it.dealPrice)!==hargaAsliItem(it); }
+function hitungOrder(d){
+  const items = d.items||[];
+  const subtotal   = items.reduce((s,i)=> s + hargaItem(i)*(Number(i.qty)||0), 0);
+  const hargaNormal= items.reduce((s,i)=> s + hargaAsliItem(i)*(Number(i.qty)||0), 0);
+  let potongan = 0;
+  const v = Number(d.discountValue)||0;
+  if(d.discountType==='percent')      potongan = Math.round(subtotal * Math.min(100,Math.max(0,v)) / 100);
+  else if(d.discountType==='nominal') potongan = Math.min(subtotal, Math.max(0, v));
+  const total = Math.max(0, subtotal - potongan);
+  return {subtotal, hargaNormal, potongan, total, hemat: hargaNormal - total};
+}
+
 /* ---------- buat order ---------- */
 function initOrderDraft(){
   orderDraft = {
@@ -1339,6 +1364,9 @@ function initOrderDraft(){
     items: [], // {productId, name, price, qty}
     bonusIds: [],
     notes: '',
+    discountType: 'none',
+    discountValue: 0,
+    discountNote: '',
     paymentStatus: 'Belum Bayar',
     paidAmount: 0,
     pickCategory: DB.categories[0]?DB.categories[0].id:'',
@@ -1349,7 +1377,7 @@ function initOrderDraft(){
 }
 function setOrderPaymentStatus(status){
   orderDraft.paymentStatus = status;
-  const total = orderDraft.items.reduce((s,i)=>s+(i.unitTotal!=null?i.unitTotal:i.price)*i.qty,0);
+  const total = hitungOrder(orderDraft).total;
   if(status==='Lunas') orderDraft.paidAmount = total;
   else if(status==='Belum Bayar') orderDraft.paidAmount = 0;
   render();
@@ -1361,7 +1389,8 @@ function renderBuatOrderTab(){
   const catOpts = DB.categories.map(c=>`<option value="${c.id}" ${d.pickCategory===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
   const prodsInCat = DB.products.filter(p=>p.categoryId===d.pickCategory);
   const prodOpts = `<option value=""${d.pickProduct?'':' selected'}>— pilih produk —</option>` + prodsInCat.map(p=>`<option value="${p.id}" ${d.pickProduct===p.id?'selected':''}>${escapeHtml(p.name)} — ${rupiah(p.price)}</option>`).join('');
-  const total = d.items.reduce((s,i)=>s+(i.unitTotal!=null?i.unitTotal:i.price)*i.qty,0);
+  const t = hitungOrder(d);
+  const total = t.total;
 
   return `
   <div class="main-head"><div><h2>${editingOrderId?'Edit Order':'Buat Order'}</h2><p>${editingOrderId?'Perbarui data order yang sudah ada.':'Isi data klien, pilih produk, lalu tambahkan bonus untuk order ini.'}</p></div></div>
@@ -1412,14 +1441,47 @@ function renderBuatOrderTab(){
       </div>`;
     })()}`}
     ${d.items.length ? `<div class="table-wrap added-items-table"><table>
-      <tr><th>Produk</th><th>Qty</th><th>Harga/pcs</th><th>Subtotal</th><th></th></tr>
+      <tr><th>Produk</th><th>Qty</th><th>Harga normal</th><th>Harga kesepakatan /pcs</th><th>Subtotal</th><th></th></tr>
       ${d.items.map((it,idx)=>{
-        const unit = it.unitTotal!=null ? it.unitTotal : it.price;
+        const asli = hargaAsliItem(it);
+        const pakai = hargaItem(it);
+        const nego = adaNego(it);
         const addonNote = it.addons&&it.addons.length? `<br><span class="muted" style="font-size:11.5px;">+ ${it.addons.map(a=>escapeHtml(a.name)).join(', ')}</span>` : '';
-        return `<tr><td>${escapeHtml(it.name)}${addonNote}</td><td>${it.qty}</td><td>${rupiah(unit)}</td><td>${rupiah(unit*it.qty)}</td>
-        <td><button class="icon-btn" onclick="removeOrderItem(${idx})">🗑️</button></td></tr>`;
+        return `<tr>
+          <td>${escapeHtml(it.name)}${nego?'<span class="tag-nego">NEGO</span>':''}${addonNote}</td>
+          <td><input type="number" min="1" class="nego-in qty" value="${it.qty}" onchange="updOrderItemQty(${idx}, this.value)"></td>
+          <td>${nego? `<span class="harga-coret">${rupiah(asli)}</span>` : rupiah(asli)}</td>
+          <td>
+            <input type="number" min="0" step="500" class="nego-in ${nego?'aktif':''}" value="${it.dealPrice!=null?it.dealPrice:''}" placeholder="${asli}" onchange="updOrderItemNego(${idx}, this.value)">
+            ${it.dealPrice!=null? `<button class="icon-btn" title="Kembalikan ke harga normal" onclick="resetOrderItemNego(${idx})">↺</button>`:''}
+          </td>
+          <td>${rupiah(pakai*it.qty)}</td>
+          <td><button class="icon-btn" onclick="removeOrderItem(${idx})">🗑️</button></td></tr>`;
       }).join('')}
-    </table></div>` : `<p class="muted" style="margin-top:10px;">Belum ada item ditambahkan.</p>`}
+    </table></div>
+    <p class="muted" style="font-size:12.5px;margin:8px 0 0;">Kolom <strong>harga kesepakatan</strong> dikosongkan = pakai harga normal. Isi angkanya kalau klien nawar.</p>
+
+    <div class="disk-box">
+      <div class="row" style="align-items:flex-end;margin-bottom:0;">
+        <div class="field" style="max-width:210px;margin-bottom:0;"><label>Diskon keseluruhan</label>
+          <select onchange="orderDraft.discountType=this.value; orderDraft.discountValue=0; render();">
+            <option value="none" ${d.discountType==='none'||!d.discountType?'selected':''}>Tidak ada</option>
+            <option value="percent" ${d.discountType==='percent'?'selected':''}>Potong persen (%)</option>
+            <option value="nominal" ${d.discountType==='nominal'?'selected':''}>Potong nominal (Rp)</option>
+          </select>
+        </div>
+        ${(d.discountType==='percent'||d.discountType==='nominal') ? `
+        <div class="field" style="max-width:160px;margin-bottom:0;"><label>${d.discountType==='percent'?'Besar diskon (%)':'Nominal potongan'}</label>
+          <input type="number" min="0" ${d.discountType==='percent'?'max="100" step="1"':'step="1000"'} value="${d.discountValue||0}" onchange="orderDraft.discountValue=Math.max(0,Number(this.value)||0); render();"></div>
+        <div class="field" style="min-width:230px;margin-bottom:0;"><label>Alasan diskon (tampil di nota)</label>
+          <input value="${escapeAttr(d.discountNote||'')}" oninput="orderDraft.discountNote=this.value" placeholder="Nego klien, langganan, order besar"></div>`:''}
+      </div>
+      ${t.potongan>0? `
+      <div class="total-line" style="margin-top:12px;"><span>Subtotal</span><span>${rupiah(t.subtotal)}</span></div>
+      <div class="total-line"><span>Diskon${d.discountNote?' — '+escapeHtml(d.discountNote):''}</span><span>&minus; ${rupiah(t.potongan)}</span></div>
+      <div class="total-line grand"><span>Total setelah diskon</span><span>${rupiah(t.total)}</span></div>`:''}
+      ${t.hemat>0? `<p class="muted" style="font-size:12.5px;margin:8px 0 0;">Klien hemat ${rupiah(t.hemat)} dari harga normal ${rupiah(t.hargaNormal)}.</p>`:''}
+    </div>` : `<p class="muted" style="margin-top:10px;">Belum ada item ditambahkan.</p>`}
   </div>
 
   <div class="panel">
@@ -1449,8 +1511,10 @@ function renderBuatOrderTab(){
   <div class="panel">
     <h3>5. Catatan &amp; Ringkasan</h3>
     <div class="field"><label>Catatan Tambahan</label><textarea rows="2" oninput="orderDraft.notes=this.value" placeholder="Catatan khusus untuk order ini">${escapeHtml(d.notes)}</textarea></div>
-    <div class="total-line"><span>Jumlah item</span><span>${d.items.reduce((s,i)=>s+i.qty,0)} pcs</span></div>
+    <div class="total-line"><span>Jumlah item</span><span>${d.items.reduce((s,i)=>s+(Number(i.qty)||0),0)} pcs</span></div>
     <div class="total-line"><span>Bonus dipilih</span><span>${d.bonusIds.length} item</span></div>
+    ${t.potongan>0? `<div class="total-line"><span>Subtotal</span><span>${rupiah(t.subtotal)}</span></div>
+    <div class="total-line"><span>Diskon${d.discountNote?' — '+escapeHtml(d.discountNote):''}</span><span>&minus; ${rupiah(t.potongan)}</span></div>`:''}
     <div class="total-line grand"><span>Total</span><span>${rupiah(total)}</span></div>
     <button class="btn btn-fuschia" onclick="submitOrder()">${editingOrderId?'Update Order':'Simpan Order'}</button>
     <button class="btn btn-outline" style="margin-left:8px;" onclick="${editingOrderId?'cancelEditOrder()':'initOrderDraft(); render();'}">${editingOrderId?'Batal Edit':'Reset Form'}</button>
@@ -1482,6 +1546,21 @@ function toggleOrderPickAddon(id){
   render();
 }
 function removeOrderItem(idx){ orderDraft.items.splice(idx,1); render(); }
+function updOrderItemQty(i, v){
+  const it = orderDraft.items[i]; if(!it) return;
+  it.qty = Math.max(1, Number(v)||1);
+  render();
+}
+function updOrderItemNego(i, v){
+  const it = orderDraft.items[i]; if(!it) return;
+  const s = String(v==null?'':v).trim();
+  it.dealPrice = (s==='') ? null : Math.max(0, Number(s)||0);
+  render();
+}
+function resetOrderItemNego(i){
+  const it = orderDraft.items[i]; if(!it) return;
+  it.dealPrice = null; render();
+}
 function toggleOrderBonus(id){
   const i = orderDraft.bonusIds.indexOf(id);
   if(i>-1) orderDraft.bonusIds.splice(i,1); else orderDraft.bonusIds.push(id);
@@ -1501,7 +1580,8 @@ function submitOrder(){
     DB.clients.push(newC); saveKey('clients');
     clientId=newC.id; clientSnap={name:newC.name,phone:newC.phone,address:newC.address};
   }
-  const total = d.items.reduce((s,i)=>s+(i.unitTotal!=null?i.unitTotal:i.price)*i.qty,0);
+  const th = hitungOrder(d);
+  const total = th.total;
 
   if(editingOrderId){
     const existing = DB.orders.find(o=>o.id===editingOrderId);
@@ -1517,6 +1597,10 @@ function submitOrder(){
     existing.items = d.items;
     existing.bonusIds = d.bonusIds.slice();
     existing.notes = d.notes;
+    existing.discountType = d.discountType || 'none';
+    existing.discountValue = Number(d.discountValue)||0;
+    existing.discountNote = d.discountNote || '';
+    existing.subtotal = th.subtotal;
     existing.paymentStatus = d.paymentStatus || 'Belum Bayar';
     existing.paidAmount = d.paidAmount || 0;
     existing.total = total;
@@ -1537,6 +1621,10 @@ function submitOrder(){
     items: d.items,
     bonusIds: d.bonusIds.slice(),
     notes: d.notes,
+    discountType: d.discountType || 'none',
+    discountValue: Number(d.discountValue)||0,
+    discountNote: d.discountNote || '',
+    subtotal: th.subtotal,
     status: 'Baru',
     paymentStatus: d.paymentStatus || 'Belum Bayar',
     paidAmount: d.paidAmount || 0,
@@ -1566,10 +1654,14 @@ function editOrder(id){
       addonIds: (it.addonIds||[]).slice(),
       addons: (it.addons||[]).map(a=>({...a})),
       unitTotal: it.unitTotal,
+      dealPrice: (it.dealPrice!=null ? it.dealPrice : null),
       qty: it.qty
     })),
     bonusIds: o.bonusIds.slice(),
     notes: o.notes || '',
+    discountType: o.discountType || 'none',
+    discountValue: Number(o.discountValue)||0,
+    discountNote: o.discountNote || '',
     paymentStatus: o.paymentStatus || 'Belum Bayar',
     paidAmount: o.paidAmount || 0,
     pickCategory: DB.categories[0] ? DB.categories[0].id : '',
@@ -1854,15 +1946,30 @@ function initInvoiceDraft(orderId){
     if(o.eventDate) billed.push('Event '+fmtTanggalPanjang(o.eventDate));
     o.items.forEach(it=>{
       const addons = it.addons||[];
-      items.push({desc: it.name, qty: it.qty, price: (it.price!=null?it.price:0), free:false, sub:false});
-      addons.forEach(a=>{
-        items.push({desc:'Add-on: '+a.name, qty: it.qty, price: a.price, free:false, sub:true});
-      });
+      if(it.dealPrice!=null){
+        // harga hasil nego: satu baris, add-on ditulis sebagai keterangan
+        items.push({
+          desc: it.name + (addons.length? '\nTermasuk: '+addons.map(a=>a.name).join(', ') : ''),
+          qty: it.qty, price: hargaItem(it), free:false, sub:false
+        });
+      }else{
+        items.push({desc: it.name, qty: it.qty, price: (it.price!=null?it.price:0), free:false, sub:false});
+        addons.forEach(a=>{
+          items.push({desc:'Add-on: '+a.name, qty: it.qty, price: a.price, free:false, sub:true});
+        });
+      }
     });
     (o.bonusIds||[]).forEach(id=>{
       const b = DB.bonus.find(b=>b.id===id);
       if(b) items.push({desc:b.name+' (free)', qty:1, price:0, free:true, sub:false});
     });
+    const po = hitungOrder(o);
+    if(po.potongan>0){
+      items.push({
+        desc: o.discountNote ? 'Diskon — '+o.discountNote : 'Diskon',
+        qty:1, price: -po.potongan, free:false, sub:false, disc:true
+      });
+    }
   }
   invoiceDraft = {
     kind: 'dp',
@@ -2054,15 +2161,17 @@ function renderInvoiceEditor(){
       <div class="inv-row">
         <div><span class="cell-lbl">Item / keterangan</span><textarea rows="3" oninput="invoiceDraft.items[${i}].desc=this.value">${escapeHtml(it.desc)}</textarea></div>
         <div><span class="cell-lbl">Qty</span><input type="number" min="0" value="${it.qty}" oninput="updInvItem(${i},'qty',this.value)"></div>
-        <div><span class="cell-lbl">Harga satuan</span><input type="number" min="0" step="500" value="${it.price}" ${it.free?'disabled':''} oninput="updInvItem(${i},'price',this.value)"></div>
+        <div><span class="cell-lbl">${it.disc?'Nominal potongan (minus)':'Harga satuan'}</span><input type="number" ${it.disc?'':'min="0"'} step="500" value="${it.price}" ${it.free?'disabled':''} oninput="updInvItem(${i},'price',this.value)"></div>
         <div><span class="cell-lbl">Total</span><div class="rowtot" id="invRowTot${i}" style="padding-top:0;">${it.free?'<span class="muted">gratis</span>':fmtNum((Number(it.qty)||0)*(Number(it.price)||0))}</div>
           <label style="font-size:12px;display:flex;gap:5px;align-items:center;margin-top:8px;"><input type="checkbox" style="width:auto;" ${it.free?'checked':''} onchange="setInvFree(${i}, this.checked)"> Gratis</label>
           <label style="font-size:12px;display:flex;gap:5px;align-items:center;margin-top:4px;"><input type="checkbox" style="width:auto;" ${it.sub?'checked':''} onchange="invoiceDraft.items[${i}].sub=this.checked; render();"> Rincian</label>
+          <label style="font-size:12px;display:flex;gap:5px;align-items:center;margin-top:4px;"><input type="checkbox" style="width:auto;" ${it.disc?'checked':''} onchange="setInvDisc(${i}, this.checked)"> Potongan</label>
         </div>
         <div><span class="cell-lbl">&nbsp;</span><button class="btn btn-outline btn-sm" onclick="hapusInvItem(${i})">Hapus</button></div>
       </div>`).join('')}
     <div class="row" style="align-items:flex-end;margin-top:6px;">
       <div class="field" style="flex:none;"><button class="btn btn-outline btn-sm" onclick="tambahInvItem()">+ Baris kosong</button></div>
+      <div class="field" style="flex:none;"><button class="btn btn-outline btn-sm" onclick="tambahInvDiskon()">+ Baris diskon</button></div>
       ${DB.addons.length? `<div class="field" style="min-width:220px;"><label>Tambah baris add-on</label><select id="invAddonPick">${addonOpts}</select></div>
       <div class="field" style="flex:none;"><button class="btn btn-outline btn-sm" onclick="tambahInvAddon()">+ Add-on</button></div>`:''}
       ${DB.bonus.length? `<div class="field" style="min-width:200px;"><label>Tambah baris bonus (free)</label><select id="invBonusPick">${DB.bonus.map(b=>`<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('')}</select></div>
@@ -2110,10 +2219,25 @@ function renderInvoiceEditor(){
 }
 function updInvItem(i, field, val){
   const it = invoiceDraft.items[i]; if(!it) return;
-  it[field] = Math.max(0, Number(val)||0);
+  const n = Number(val)||0;
+  it[field] = (field==='price' && it.disc) ? n : Math.max(0, n);
   const cell = document.getElementById('invRowTot'+i);
   if(cell) cell.innerHTML = it.free ? '<span class="muted">gratis</span>' : fmtNum(it.qty*it.price);
   hitungUlangInvoice();
+}
+function setInvDisc(i, checked){
+  const it = invoiceDraft.items[i]; if(!it) return;
+  it.disc = checked;
+  if(checked){
+    it.free = false; it.sub = false; it.qty = 1;
+    if(it.price>0) it.price = -it.price;
+    if(!String(it.desc||'').trim()) it.desc = 'Diskon';
+  }else if(it.price<0){ it.price = Math.abs(it.price); }
+  render();
+}
+function tambahInvDiskon(){
+  invoiceDraft.items.push({desc:'Diskon', qty:1, price:0, free:false, sub:false, disc:true});
+  render();
 }
 function hitungUlangInvoice(){
   const t = hitungInvoice(invoiceDraft);
@@ -2219,9 +2343,9 @@ function renderInvoiceSheet(inv){
     return `
     <tr class="${cls.trim()}">
       <td class="${i.sub?'sub-desc':''}">${escapeHtml(i.desc)}</td>
-      <td class="qty">${i.qty!==''&&i.qty!=null?i.qty:''}</td>
-      <td class="up">${i.free?'':fmtNum(i.price)}</td>
-      <td class="tot">${i.free?'':fmtNum((Number(i.qty)||0)*(Number(i.price)||0))}</td>
+      <td class="qty">${(i.disc||i.qty===''||i.qty==null)?'':i.qty}</td>
+      <td class="up">${(i.free||i.disc)?'':fmtNum(i.price)}</td>
+      <td class="tot">${i.free?'':(i.disc?'&minus; '+fmtNum(Math.abs((Number(i.qty)||0)*(Number(i.price)||0))):fmtNum((Number(i.qty)||0)*(Number(i.price)||0)))}</td>
     </tr>`;
   }).join('');
   return `
@@ -2302,7 +2426,9 @@ function bukaWa(no, pesan){
   showToast('WhatsApp dibuka. Lampirkan file PDF-nya ya.');
 }
 function barisTeks(i){
-  const nama = i.sub ? '   ' + i.desc : '- ' + i.desc;
+  const desc = String(i.desc||'').replace(/\s*\n\s*/g, ' · ');
+  const nama = i.sub ? '   ' + desc : '- ' + desc;
+  if(i.disc) return nama + ': ' + rupiah((Number(i.qty)||0)*(Number(i.price)||0));
   if(i.free) return nama + ' — ' + i.qty + ' pcs (gratis)';
   return nama + ' — ' + i.qty + ' x ' + rupiah(i.price) + ' = ' + rupiah((Number(i.qty)||0)*(Number(i.price)||0));
 }
@@ -2377,6 +2503,10 @@ function pesanWaOrder(o){
     + (o.eventDate ? 'Tanggal acara: ' + fmtDate(o.eventDate) + '\n' : '')
     + 'Status: ' + o.status + '\n\n'
     + 'Rincian:\n' + rows.map(barisTeks).join('\n') + '\n\n'
+    + (hitungOrder(o).potongan>0
+        ? 'Subtotal: ' + rupiah(hitungOrder(o).subtotal) + '\n'
+          + 'Diskon' + (o.discountNote? ' ('+o.discountNote+')':'') + ': -' + rupiah(hitungOrder(o).potongan) + '\n'
+        : '')
     + 'Total: ' + rupiah(o.total) + '\n\n'
     + (o.notes ? 'Catatan: ' + o.notes + '\n\n' : '')
     + 'Mohon dicek kembali ya, kalau sudah sesuai saya lanjutkan prosesnya. Terima kasih 🙏';
@@ -2394,8 +2524,13 @@ function barisOrder(o){
   const rows = [];
   o.items.forEach(it=>{
     const addons = it.addons||[];
-    rows.push({desc: it.name, qty: it.qty, price: (it.price!=null?it.price:0), free:false, sub:false});
-    addons.forEach(a=> rows.push({desc:'Add-on: '+a.name, qty: it.qty, price: a.price, free:false, sub:true}));
+    if(it.dealPrice!=null){
+      rows.push({desc: it.name + (addons.length? ' (termasuk '+addons.map(a=>a.name).join(', ')+')':'') + ' [harga nego]',
+                 qty: it.qty, price: hargaItem(it), free:false, sub:false});
+    }else{
+      rows.push({desc: it.name, qty: it.qty, price: (it.price!=null?it.price:0), free:false, sub:false});
+      addons.forEach(a=> rows.push({desc:'Add-on: '+a.name, qty: it.qty, price: a.price, free:false, sub:true}));
+    }
   });
   return rows;
 }
@@ -2404,8 +2539,22 @@ function renderOrderSheet(o){
   const c = o.clientSnapshot||{};
   const totalPcs = o.items.reduce((x,i)=>x+i.qty,0);
   const telp = teleponKlien(o);
+  const ot = hitungOrder(o);
   const rows = o.items.map(it=>{
     const addons = it.addons||[];
+    if(it.dealPrice!=null){
+      const pakai = hargaItem(it), asli = hargaAsliItem(it);
+      return `
+    <tr>
+      <td><span class="ord-item-name">${escapeHtml(it.name)}</span>
+        ${addons.length? `<div style="font-size:11.5px;color:#7b7669;">Termasuk: ${addons.map(a=>escapeHtml(a.name)).join(', ')}</div>`:''}
+        ${pakai!==asli? `<div style="font-size:11.5px;color:#7b7669;">Harga normal ${rupiah(asli)} · harga kesepakatan</div>`:''}
+      </td>
+      <td class="c">${it.qty}</td>
+      <td class="r">${rupiah(pakai)}</td>
+      <td class="r">${rupiah(pakai*it.qty)}</td>
+    </tr>`;
+    }
     const unit = (it.price!=null?it.price:0);
     let html = `
     <tr class="${addons.length?'grp':''}">
@@ -2461,6 +2610,8 @@ function renderOrderSheet(o){
 
       <div class="ord-total">
         <div class="tr"><span>Jumlah item</span><span>${totalPcs} pcs</span></div>
+        ${ot.potongan>0? `<div class="tr"><span>Subtotal</span><span>${rupiah(ot.subtotal)}</span></div>
+        <div class="tr"><span>Diskon${o.discountNote?' — '+escapeHtml(o.discountNote):''}</span><span>&minus; ${rupiah(ot.potongan)}</span></div>`:''}
         <div class="tr main"><span>Total Pesanan</span><span>${rupiah(o.total)}</span></div>
       </div>
 
