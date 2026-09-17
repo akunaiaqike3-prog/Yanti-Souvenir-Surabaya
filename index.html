@@ -546,9 +546,10 @@ let fsListenersAttached = false;
 let fsInitialLoadCount = 0;
 const FS_TOTAL_KEYS = Object.keys(STORE_KEYS).length;
 let pendingProductImage = null; // data URL gambar produk yang baru diupload (sementara, sebelum disimpan)
-let isUploadingProdImage = false; // true selagi foto produk sedang diupload ke hosting (ImgBB)
-// Ganti nilai di bawah ini dengan API key ImgBB kamu (daftar gratis di https://api.imgbb.com/)
-const IMGBB_API_KEY = '8f6d2190de41e12c029b49fcfb9efe3a';
+let isUploadingProdImage = false; // true selagi foto produk sedang diupload ke hosting (Cloudinary)
+// Konfigurasi Cloudinary (hosting gambar produk, biar dapat link https yang bisa di-preview WA)
+const CLOUDINARY_CLOUD_NAME = 'hps9kq9i';
+const CLOUDINARY_UPLOAD_PRESET = 'Yanti Souvenir Surabaya';
 let pendingProductAddons = null; // add-on yang dipilih untuk produk yang sedang diedit: [{id,price}] (sementara)
 let isAdmin = false;
 const ADMIN_SESSION_KEY = 'ysAdminSession';
@@ -1211,18 +1212,14 @@ function compressImageFile(file, maxDim, quality){
     reader.readAsDataURL(file);
   });
 }
-async function uploadToImgbb(dataUrl){
-  if(!IMGBB_API_KEY || IMGBB_API_KEY === 'MASUKKAN_API_KEY_IMGBB_DISINI'){
-    throw new Error('API key ImgBB belum diisi.');
-  }
-  const base64 = dataUrl.split(',')[1];
+async function uploadToCloudinary(dataUrl){
   const form = new FormData();
-  form.append('key', IMGBB_API_KEY);
-  form.append('image', base64);
-  const res = await fetch('https://api.imgbb.com/1/upload', { method:'POST', body: form });
+  form.append('file', dataUrl);
+  form.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+  const res = await fetch('https://api.cloudinary.com/v1_1/' + CLOUDINARY_CLOUD_NAME + '/image/upload', { method:'POST', body: form });
   const json = await res.json();
-  if(!json || !json.success || !json.data || !json.data.url) throw new Error('Upload ke ImgBB gagal.');
-  return json.data.url;
+  if(!json || !json.secure_url) throw new Error('Upload ke Cloudinary gagal.');
+  return json.secure_url;
 }
 async function handleProdImageUpload(event){
   const file = event.target.files && event.target.files[0];
@@ -1234,7 +1231,7 @@ async function handleProdImageUpload(event){
     if(urlField) urlField.value = '';
     isUploadingProdImage = true;
     updateProdImagePreview();
-    const hostedUrl = await uploadToImgbb(dataUrl);
+    const hostedUrl = await uploadToCloudinary(dataUrl);
     pendingProductImage = hostedUrl;
     isUploadingProdImage = false;
     updateProdImagePreview();
@@ -1243,7 +1240,7 @@ async function handleProdImageUpload(event){
     isUploadingProdImage = false;
     pendingProductImage = null;
     updateProdImagePreview();
-    showToast('Gagal upload gambar ke hosting. Cek API key ImgBB, atau isi URL gambar manual.');
+    showToast('Gagal upload gambar ke hosting. Cek koneksi, atau isi URL gambar manual.');
   }
 }
 function saveProduk(){
