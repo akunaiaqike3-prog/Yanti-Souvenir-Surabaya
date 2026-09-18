@@ -871,8 +871,8 @@ function pesanWaProduk(p){
   baris.push('Harga: ' + rupiah(p.price));
   if(p.description) baris.push('Keterangan: ' + p.description);
   baris.push('');
-  baris.push('🔗 Lihat produk ini di katalog: ' + produkLink(p));
   if(isHttpImageUrl(p.image)) baris.push('🖼️ Foto produk: ' + p.image.trim());
+  baris.push('🔗 Lihat produk ini di katalog: ' + produkLink(p));
   baris.push('');
   baris.push('Boleh minta info harga & minimal order-nya? 🙏');
   return baris.join('\n');
