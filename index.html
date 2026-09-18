@@ -188,8 +188,6 @@
     transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
   }
   .product-card:hover{transform:translateY(-5px);box-shadow:0 16px 32px rgba(51,47,42,.14);border-color:var(--fuschia-tint);}
-  .product-card.highlight-target{border-color:var(--fuschia);box-shadow:0 0 0 3px var(--fuschia-tint), 0 16px 32px rgba(51,47,42,.14);animation:prodHighlightPulse 1.4s ease-in-out 2;}
-  @keyframes prodHighlightPulse{0%,100%{box-shadow:0 0 0 3px var(--fuschia-tint), 0 16px 32px rgba(51,47,42,.14);}50%{box-shadow:0 0 0 7px var(--fuschia-tint), 0 16px 32px rgba(51,47,42,.14);}}
   .product-thumb{
     position:relative;height:168px;display:flex;align-items:center;justify-content:center;
     background:linear-gradient(135deg,var(--fuschia-tint),var(--champagne));
@@ -546,10 +544,6 @@ let fsListenersAttached = false;
 let fsInitialLoadCount = 0;
 const FS_TOTAL_KEYS = Object.keys(STORE_KEYS).length;
 let pendingProductImage = null; // data URL gambar produk yang baru diupload (sementara, sebelum disimpan)
-let isUploadingProdImage = false; // true selagi foto produk sedang diupload ke hosting (Cloudinary)
-// Konfigurasi Cloudinary (hosting gambar produk, biar dapat link https yang bisa di-preview WA)
-const CLOUDINARY_CLOUD_NAME = 'hps9kq9i';
-const CLOUDINARY_UPLOAD_PRESET = 'Yanti Souvenir Surabaya';
 let pendingProductAddons = null; // add-on yang dipilih untuk produk yang sedang diedit: [{id,price}] (sementara)
 let isAdmin = false;
 const ADMIN_SESSION_KEY = 'ysAdminSession';
@@ -559,7 +553,6 @@ let loaded = false;
 let sidebarOpen = (typeof window !== 'undefined' && window.innerWidth <= 800) ? false : true;
 
 let clientFilter = { cat: 'all', q: '' };
-let pendingHighlightProductId = null; // id produk yang perlu di-scroll & disorot saat katalog klien dibuka via link "Tanya produk ini"
 let orderDraft = null; // saat sedang membuat order
 let editingOrderId = null; // saat sedang mengedit order yang sudah ada
 let penawaranDraft = null; // saat sedang menyusun penawaran ke calon klien
@@ -703,22 +696,9 @@ function render(){
   if(!loaded){ app.innerHTML = renderLoading(); return; }
   if(currentView==='landing') app.innerHTML = renderLanding();
   else if(currentView==='login') app.innerHTML = renderLogin();
-  else if(currentView==='client'){ app.innerHTML = renderClient(); applyPendingHighlight(); }
+  else if(currentView==='client') app.innerHTML = renderClient();
   else if(currentView==='admin') app.innerHTML = renderAdmin();
   if(modal) renderModal();
-}
-function applyPendingHighlight(){
-  if(!pendingHighlightProductId) return;
-  const id = pendingHighlightProductId;
-  setTimeout(function(){
-    const el = document.getElementById('prodcard-'+id);
-    if(el){
-      el.scrollIntoView({behavior:'smooth', block:'center'});
-      el.classList.add('highlight-target');
-      setTimeout(function(){ el.classList.remove('highlight-target'); }, 3000);
-    }
-  }, 60);
-  pendingHighlightProductId = null;
 }
 
 function renderLoading(){
@@ -855,27 +835,8 @@ function waLinkPesan(phone, text){
   else if(!d.startsWith('62')) d = '62'+d;
   return 'https://wa.me/'+d+'?text='+encodeURIComponent(text||'');
 }
-function produkLink(p){
-  return location.origin + location.pathname + '#klien?p=' + encodeURIComponent(p.id);
-}
-function isHttpImageUrl(url){
-  return /^https?:\/\//i.test(String(url||'').trim());
-}
 function pesanWaProduk(p){
-  const cat = DB.categories.find(c=>c.id===p.categoryId);
-  const baris = [];
-  baris.push('Halo, saya mau tanya-tanya soal produk berikut dari katalog Yanti Souvenir Surabaya:');
-  baris.push('');
-  baris.push('🎁 *' + p.name + '*');
-  if(cat) baris.push('Kategori: ' + cat.name);
-  baris.push('Harga: ' + rupiah(p.price));
-  if(p.description) baris.push('Keterangan: ' + p.description);
-  baris.push('');
-  if(isHttpImageUrl(p.image)) baris.push('🖼️ Foto produk: ' + p.image.trim());
-  baris.push('🔗 Lihat produk ini di katalog: ' + produkLink(p));
-  baris.push('');
-  baris.push('Boleh minta info harga & minimal order-nya? 🙏');
-  return baris.join('\n');
+  return 'Halo, saya mau tanya-tanya soal produk *' + p.name + '* yang saya lihat di katalog Yanti Souvenir Surabaya. Boleh minta info harga & minimal order-nya? 🙏';
 }
 function igLink(handle){
   const h = String(handle||'').trim().replace(/^@/,'');
@@ -1183,7 +1144,6 @@ function updateProdImagePreview(){
   const urlVal = document.getElementById('prodImage') ? document.getElementById('prodImage').value.trim() : '';
   const box = document.getElementById('prodImagePreviewBox');
   if(!box) return;
-  if(isUploadingProdImage){ box.innerHTML = `<span style="font-size:11px;color:var(--grey-soft);text-align:center;padding:4px;">Mengupload...</span>`; return; }
   const src = pendingProductImage || urlVal || (editData ? editData.image : '') || '';
   box.innerHTML = src ? `<img src="${escapeAttr(src)}" alt="" style="width:100%;height:100%;object-fit:cover;">` : `<span style="font-size:11px;color:var(--grey-soft);">Belum ada</span>`;
 }
@@ -1212,39 +1172,20 @@ function compressImageFile(file, maxDim, quality){
     reader.readAsDataURL(file);
   });
 }
-async function uploadToCloudinary(dataUrl){
-  const form = new FormData();
-  form.append('file', dataUrl);
-  form.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
-  const res = await fetch('https://api.cloudinary.com/v1_1/' + CLOUDINARY_CLOUD_NAME + '/image/upload', { method:'POST', body: form });
-  const json = await res.json();
-  if(!json || !json.secure_url) throw new Error('Upload ke Cloudinary gagal.');
-  return json.secure_url;
-}
 async function handleProdImageUpload(event){
   const file = event.target.files && event.target.files[0];
   if(!file) return;
   try{
     const dataUrl = await compressImageFile(file, 700, 0.75);
-    pendingProductImage = dataUrl; // preview lokal dulu biar responsif
+    pendingProductImage = dataUrl;
     const urlField = document.getElementById('prodImage');
     if(urlField) urlField.value = '';
-    isUploadingProdImage = true;
     updateProdImagePreview();
-    const hostedUrl = await uploadToCloudinary(dataUrl);
-    pendingProductImage = hostedUrl;
-    isUploadingProdImage = false;
-    updateProdImagePreview();
-    showToast('Gambar berhasil diupload & siap dibagikan link-nya.');
   }catch(e){
-    isUploadingProdImage = false;
-    pendingProductImage = null;
-    updateProdImagePreview();
-    showToast('Gagal upload gambar ke hosting. Cek koneksi, atau isi URL gambar manual.');
+    showToast('Gagal memproses gambar. Coba file lain.');
   }
 }
 function saveProduk(){
-  if(isUploadingProdImage){ showToast('Tunggu upload gambar selesai dulu ya.'); return; }
   const name = document.getElementById('prodName').value.trim();
   const categoryId = document.getElementById('prodCat').value;
   const price = Number(document.getElementById('prodPrice').value)||0;
@@ -3024,17 +2965,9 @@ function escapeAttr(str){ return escapeHtml(str); }
 (async function init(){
   render();
   await loadAll(); // menunggu load awal dari Firestore; setelah ini, data tetap realtime tersinkron
-  if(location.hash === '#klien' || location.hash.indexOf('#klien?') === 0){
+  if(location.hash === '#klien'){
     // Link khusus klien: selalu tampilkan katalog klien saja, tidak pernah menampilkan peran admin.
     currentView='client';
-    const qIdx = location.hash.indexOf('?');
-    if(qIdx !== -1){
-      try{
-        const params = new URLSearchParams(location.hash.slice(qIdx+1));
-        const pid = params.get('p');
-        if(pid) pendingHighlightProductId = pid;
-      }catch(e){}
-    }
   } else if(location.hash === '#admin'){
     // Link khusus admin: kalau sesi login masih tersimpan, langsung ke dashboard tanpa minta kode lagi.
     let hasSession = false;
