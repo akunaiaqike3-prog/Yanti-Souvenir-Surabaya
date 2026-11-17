@@ -607,6 +607,7 @@ function normalizeSettings(){
 // DB langsung diperbarui dan halaman digambar ulang otomatis.
 async function loadAll(){
   return new Promise((resolve)=>{
+    setTimeout(()=>{ if(!loaded){ console.warn('Timeout loading, lanjut tampil'); finishInitialLoad(); resolve(); } }, 8000);
     for(const key in STORE_KEYS){
       const docId = STORE_KEYS[key];
       const ref = (key==='products') ? fsdb.collection(PROD_COL) : fsdb.collection(FS_COLLECTION).doc(docId);
@@ -646,21 +647,26 @@ async function loadAll(){
   });
 }
 
+let _finishing=false;
 async function finishInitialLoad(){
+  if(_finishing) return; _finishing=true;
   normalizeSettings();
   // Migrasi: produk lama (satu dokumen yanti_data/products) -> satu dokumen per produk
-  if(DB.products.length===0){
-    try{
+  if(DB.products.length===0 && !DB.settings.productsMigrated){
+    (async()=>{ try{
       const old = await fsdb.collection(FS_COLLECTION).doc(STORE_KEYS.products).get();
       const arr = old.exists && old.data() && Array.isArray(old.data().value) ? old.data().value : [];
       if(arr.length){
         arr.forEach((p,i)=>{ if(!p.createdAt) p.createdAt = Date.now()+i; });
         DB.products = arr;
-        await saveKey('products');
-        DB.settings.seeded = true;
-        await saveKey('settings');
+        render();
+        let ok = true;
+        for(const p of arr){   // satu per satu agar tidak kena batas ukuran request
+          try{ await fsdb.collection(PROD_COL).doc(p.id).set(p); }catch(e){ ok=false; console.error(e); showToast('Migrasi produk gagal: '+(e.code||e.message)); break; }
+        }
+        if(ok){ DB.settings.seeded = true; DB.settings.productsMigrated = true; await saveKey('settings'); }
       }
-    }catch(e){ console.error('Migrasi produk gagal', e); showToast('Migrasi produk gagal: '+(e.code||e.message)); }
+    }catch(e){ console.error('Migrasi produk gagal', e); } })();
   }
   if(!DB.settings.seeded && DB.categories.length===0 && DB.products.length===0){
     seedData();
