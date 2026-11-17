@@ -544,7 +544,21 @@ let fsListenersAttached = false;
 let fsInitialLoadCount = 0;
 const FS_TOTAL_KEYS = Object.keys(STORE_KEYS).length;
 let pendingProductImage = null; // data URL gambar produk yang baru diupload (sementara, sebelum disimpan)
+let prodDraft = null; // isi form produk (nama, kategori, harga, deskripsi, url) agar tidak hilang saat render()
+const PROD_COL = 'yanti_products'; // 1 produk = 1 dokumen Firestore (batas 1 MiB per produk, bukan per semua produk)
+function saveDraftLS(){
+  try{ sessionStorage.setItem('yanti_prod_draft', JSON.stringify({draft:prodDraft, image:pendingProductImage, addons:pendingProductAddons})); }catch(e){}
+}
+function clearDraftLS(){ try{ sessionStorage.removeItem('yanti_prod_draft'); }catch(e){} }
+function restoreDraftLS(){
+  try{
+    const raw = sessionStorage.getItem('yanti_prod_draft'); if(!raw) return;
+    const o = JSON.parse(raw);
+    if(o && o.draft && o.draft.forId===''){ prodDraft=o.draft; pendingProductImage=o.image||null; pendingProductAddons=o.addons||null; }
+  }catch(e){}
+}
 let pendingProductAddons = null; // add-on yang dipilih untuk produk yang sedang diedit: [{id,price}] (sementara)
+restoreDraftLS();
 let isAdmin = false;
 const ADMIN_SESSION_KEY = 'ysAdminSession';
 let currentView = 'landing'; // landing | login | client | admin
@@ -595,8 +609,11 @@ async function loadAll(){
   return new Promise((resolve)=>{
     for(const key in STORE_KEYS){
       const docId = STORE_KEYS[key];
-      fsdb.collection(FS_COLLECTION).doc(docId).onSnapshot((doc)=>{
-        if(doc.exists){
+      const ref = (key==='products') ? fsdb.collection(PROD_COL) : fsdb.collection(FS_COLLECTION).doc(docId);
+      ref.onSnapshot((doc)=>{
+        if(key==='products'){
+          DB.products = doc.docs.map(d=>d.data()).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+        } else if(doc.exists){
           const data = doc.data();
           DB[key] = (data && 'value' in data) ? data.value : (key==='settings' ? {} : []);
         } else {
@@ -616,7 +633,7 @@ async function loadAll(){
         }
       }, (err)=>{
         console.error('Firestore sync error ('+key+'):', err);
-        showToast('Gagal sinkronisasi data. Cek koneksi/konfigurasi Firebase.');
+        showToast('Gagal sinkronisasi ('+key+'): '+(err.code||err.message));
         if(!loaded){
           fsInitialLoadCount++;
           if(fsInitialLoadCount >= FS_TOTAL_KEYS){
@@ -631,6 +648,20 @@ async function loadAll(){
 
 async function finishInitialLoad(){
   normalizeSettings();
+  // Migrasi: produk lama (satu dokumen yanti_data/products) -> satu dokumen per produk
+  if(DB.products.length===0){
+    try{
+      const old = await fsdb.collection(FS_COLLECTION).doc(STORE_KEYS.products).get();
+      const arr = old.exists && old.data() && Array.isArray(old.data().value) ? old.data().value : [];
+      if(arr.length){
+        arr.forEach((p,i)=>{ if(!p.createdAt) p.createdAt = Date.now()+i; });
+        DB.products = arr;
+        await saveKey('products');
+        DB.settings.seeded = true;
+        await saveKey('settings');
+      }
+    }catch(e){ console.error('Migrasi produk gagal', e); showToast('Migrasi produk gagal: '+(e.code||e.message)); }
+  }
   if(!DB.settings.seeded && DB.categories.length===0 && DB.products.length===0){
     seedData();
     DB.settings.seeded = true;
@@ -649,14 +680,22 @@ async function finishInitialLoad(){
 
 async function saveKey(key){
   try{
+    if(key==='products'){
+      const batch = fsdb.batch();
+      DB.products.forEach(p=>{ if(!p.createdAt) p.createdAt = Date.now(); batch.set(fsdb.collection(PROD_COL).doc(p.id), p); });
+      await batch.commit();
+      return true;
+    }
     await fsdb.collection(FS_COLLECTION).doc(STORE_KEYS[key]).set({ value: DB[key] });
     // Tidak perlu render() manual di sini — onSnapshot akan otomatis
     // memicu render begitu Firestore mengonfirmasi perubahan (baik di
     // perangkat ini maupun perangkat lain).
   }catch(e){
-    showToast('Gagal menyimpan data. Coba lagi.');
+    showToast('Gagal menyimpan: '+(e.code||e.message));
     console.error(e);
+    return false;
   }
+  return true;
 }
 
 function seedData(){
@@ -943,7 +982,7 @@ function renderAdmin(){
   </div>`;
 }
 function setAdminTab(t){
-  adminTab=t; editing={type:null,id:null}; pendingProductImage=null;
+  adminTab=t; editing={type:null,id:null}; pendingProductImage=null; prodDraft=null; clearDraftLS();
   if(t!=='invoice'){ invoiceDraft=null; editingInvoiceId=null; }
   if(t==='buatorder'){
     if(editingOrderId){ editingOrderId=null; initOrderDraft(); }
@@ -1059,11 +1098,12 @@ function deleteKategori(id){
   DB.categories = DB.categories.filter(c=>c.id!==id);
   saveKey('categories'); showToast('Kategori dihapus.'); render();
 }
-function cancelEdit(){ editing={type:null,id:null}; pendingProductImage=null; pendingProductAddons=null; render(); }
+function cancelEdit(){ editing={type:null,id:null}; pendingProductImage=null; pendingProductAddons=null; prodDraft=null; clearDraftLS(); render(); }
 function toggleProdAddon(id, defaultPrice){
   const i = pendingProductAddons.findIndex(pa=>pa.id===id);
   if(i>-1) pendingProductAddons.splice(i,1);
   else pendingProductAddons.push({id, price:Number(defaultPrice)||0});
+  saveDraftLS();
   render();
 }
 function setProdAddonPrice(id, price){
@@ -1075,23 +1115,27 @@ function setProdAddonPrice(id, price){
 function renderKatalogTab(){
   const isEdit = editing.type==='produk';
   const editData = isEdit ? DB.products.find(p=>p.id===editing.id) : null;
+  const forId = isEdit ? editing.id : '';
+  if(!prodDraft || prodDraft.forId!==forId){
+    prodDraft = {forId, name:editData?editData.name||'':'', categoryId:editData?editData.categoryId:'', price:editData&&editData.price!=null?editData.price:'', description:editData?editData.description||'':'', imageUrl:(editData&&editData.image&&!String(editData.image).startsWith('data:'))?editData.image:''};
+  }
   if(pendingProductAddons===null){ pendingProductAddons = editData ? (editData.addons||[]).map(a=>({id:a.id,price:a.price})) : []; }
-  const catOpts = DB.categories.map(c=>`<option value="${c.id}" ${editData&&editData.categoryId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
+  const catOpts = DB.categories.map(c=>`<option value="${c.id}" ${prodDraft.categoryId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
   return `
   <div class="main-head"><div><h2>Katalog Produk</h2><p>Kelola daftar souvenir beserta harga dan deskripsi.</p></div></div>
   <div class="panel">
     <h3>${isEdit?'Edit Produk':'Tambah Produk'}</h3>
     ${DB.categories.length===0? `<p class="muted">Tambahkan kategori terlebih dahulu sebelum membuat produk.</p>` : `
     <div class="row">
-      <div class="field"><label>Nama Produk</label><input id="prodName" value="${editData?escapeAttr(editData.name):''}" placeholder="Misal: Tumbler Stainless 350ml"></div>
-      <div class="field"><label>Kategori</label><select id="prodCat">${catOpts}</select></div>
+      <div class="field"><label>Nama Produk</label><input id="prodName" value="${escapeAttr(prodDraft.name)}" oninput="prodDraft.name=this.value;saveDraftLS()" placeholder="Misal: Tumbler Stainless 350ml"></div>
+      <div class="field"><label>Kategori</label><select id="prodCat" onchange="prodDraft.categoryId=this.value;saveDraftLS()">${catOpts}</select></div>
     </div>
     <div class="row">
-      <div class="field"><label>Harga (Rp)</label><input id="prodPrice" type="number" min="0" value="${editData?editData.price:''}" placeholder="0"></div>
+      <div class="field"><label>Harga (Rp)</label><input id="prodPrice" type="number" inputmode="numeric" min="0" value="${escapeAttr(String(prodDraft.price))}" oninput="prodDraft.price=this.value;saveDraftLS()" placeholder="0"></div>
       <div class="field"><label>Gambar Produk</label><input id="prodImageFile" type="file" accept="image/*" onchange="handleProdImageUpload(event)"></div>
     </div>
     <div class="row" style="align-items:flex-start;">
-      <div class="field" style="max-width:280px;"><label>atau URL Gambar (opsional)</label><input id="prodImage" value="${editData&&!pendingProductImage?escapeAttr(editData.image||''):''}" placeholder="https://..." oninput="pendingProductImage=null; updateProdImagePreview();"></div>
+      <div class="field" style="max-width:280px;"><label>atau URL Gambar (opsional)</label><input id="prodImage" value="${pendingProductImage?'':escapeAttr(prodDraft.imageUrl)}" placeholder="https://..." oninput="pendingProductImage=null; prodDraft.imageUrl=this.value; saveDraftLS(); updateProdImagePreview();"></div>
       <div class="field" style="max-width:120px;">
         <label>Preview</label>
         <div id="prodImagePreviewBox" style="width:90px;height:90px;border-radius:10px;overflow:hidden;background:var(--champagne-pale);border:1px solid var(--grey-line);display:flex;align-items:center;justify-content:center;">
@@ -1099,7 +1143,7 @@ function renderKatalogTab(){
         </div>
       </div>
     </div>
-    <div class="field"><label>Deskripsi</label><textarea id="prodDesc" rows="2" placeholder="Deskripsi singkat produk">${editData?escapeHtml(editData.description||''):''}</textarea></div>
+    <div class="field"><label>Deskripsi</label><textarea id="prodDesc" rows="2" placeholder="Deskripsi singkat produk" oninput="prodDraft.description=this.value;saveDraftLS()">${escapeHtml(prodDraft.description)}</textarea></div>
     <div class="field">
       <label>Add-On yang tersedia untuk produk ini</label>
       <p class="muted" style="margin:0 0 8px;font-size:12.5px;">Centang add-on yang berlaku, lalu isi harga tambahan khusus untuk produk ini (harga add-on bisa beda-beda tiap produk).</p>
@@ -1165,7 +1209,7 @@ function compressImageFile(file, maxDim, quality){
         ctx.drawImage(img, 0, 0, w, h);
         resolve(canvas.toDataURL('image/jpeg', quality));
       };
-      img.onerror = reject;
+      img.onerror = ()=>reject(new Error('decode gambar gagal'));
       img.src = e.target.result;
     };
     reader.onerror = reject;
@@ -1176,16 +1220,19 @@ async function handleProdImageUpload(event){
   const file = event.target.files && event.target.files[0];
   if(!file) return;
   try{
-    const dataUrl = await compressImageFile(file, 700, 0.75);
+    const dataUrl = await compressImageFile(file, 600, 0.7);
     pendingProductImage = dataUrl;
+    if(prodDraft) prodDraft.imageUrl='';
+    saveDraftLS();
     const urlField = document.getElementById('prodImage');
     if(urlField) urlField.value = '';
     updateProdImagePreview();
   }catch(e){
-    showToast('Gagal memproses gambar. Coba file lain.');
+    showToast('Gagal memproses gambar (format tidak didukung?). Coba foto lain atau pakai URL gambar.');
+    console.error(e);
   }
 }
-function saveProduk(){
+async function saveProduk(){
   const name = document.getElementById('prodName').value.trim();
   const categoryId = document.getElementById('prodCat').value;
   const price = Number(document.getElementById('prodPrice').value)||0;
@@ -1201,16 +1248,26 @@ function saveProduk(){
   }else{
     DB.products.push({id:uid('p'), name,categoryId,price,image,description,addons});
   }
-  editing={type:null,id:null};
-  pendingProductImage = null;
-  pendingProductAddons = null;
-  saveKey('products'); showToast('Produk disimpan.'); render();
+  const btn = document.querySelector('.btn.btn-fuschia[onclick="saveProduk()"]');
+  if(btn){ btn.disabled = true; btn.textContent = 'Menyimpan...'; }
+  saveKey('products').then(ok=>{
+    if(ok){
+      editing={type:null,id:null};
+      pendingProductImage = null;
+      pendingProductAddons = null;
+      prodDraft = null; clearDraftLS();
+      showToast('Produk disimpan.');
+    }
+    // jika gagal: isi form tetap ada supaya bisa dicoba lagi
+    render();
+  });
 }
-function editProduk(id){ editing={type:'produk',id}; pendingProductImage=null; pendingProductAddons=null; render(); }
+function editProduk(id){ editing={type:'produk',id}; pendingProductImage=null; pendingProductAddons=null; prodDraft=null; clearDraftLS(); render(); }
 function deleteProduk(id){
   if(!confirm('Hapus produk ini dari katalog?')) return;
   DB.products = DB.products.filter(p=>p.id!==id);
-  saveKey('products'); showToast('Produk dihapus.'); render();
+  render();
+  fsdb.collection(PROD_COL).doc(id).delete().then(()=>showToast('Produk dihapus.')).catch(e=>{ console.error(e); showToast('Gagal menghapus: '+(e.code||e.message)); });
 }
 
 /* ---------- bonus ---------- */
